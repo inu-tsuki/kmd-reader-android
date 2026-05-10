@@ -9,18 +9,25 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = KmdTeal80,
+    secondary = KmdMist80,
+    tertiary = KmdGold80,
+    background = Color(0xFF111817),
+    surface = Color(0xFF17201F),
+    surfaceVariant = Color(0xFF243230)
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
+    primary = KmdTeal40,
+    secondary = KmdSlate40,
+    tertiary = KmdGold40,
+    background = Color(0xFFF8FAF8),
+    surface = Color(0xFFFFFFFF),
+    surfaceVariant = Color(0xFFE4ECE9)
 
     /* Other default colors to override
     background = Color(0xFFFFFBFE),
@@ -37,7 +44,7 @@ private val LightColorScheme = lightColorScheme(
 fun KmdreaderTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
