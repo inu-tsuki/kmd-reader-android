@@ -21,5 +21,8 @@ enum class IssueSource(val label: String) {
     Layout("Layout"),
     Effect("Effect"),
     Asset("Asset"),
-    Performance("Performance")
+    Performance("Performance"),
+    Metadata("Metadata"),
+    Accessibility("Accessibility"),
+    Runtime("Runtime")
 }

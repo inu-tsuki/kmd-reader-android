@@ -2,7 +2,7 @@
 
 > 项目阶段：第二阶段架构设计
 > 文档状态：草案
-> 最近更新：2026-05-10
+> 最近更新：2026-05-13
 
 ## 1. 架构目标
 
@@ -317,6 +317,12 @@ hardcoded mock
 ## 8. Runtime Bridge
 
 Android 端不实现 KMD parser、layout 或 renderer。Reader Runtime 是外部能力，Android 只做宿主。
+
+ViewModel 与 Runtime Bridge 的详细演进规划见：
+
+```text
+docs/viewmodel-runtime-plan.md
+```
 
 ### 8.1 Bridge 边界
 
