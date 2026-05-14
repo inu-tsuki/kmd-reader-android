@@ -1,5 +1,6 @@
 package com.example.kmd_reader.ui.app
 
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -19,11 +20,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import com.example.kmd_reader.data.MockWorkRepository
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.kmd_reader.presentation.Desk
 import com.example.kmd_reader.presentation.KmdReaderAction
-import com.example.kmd_reader.presentation.KmdReaderReducer
-import com.example.kmd_reader.presentation.KmdReaderState
+import com.example.kmd_reader.presentation.KmdReaderEffect
+import com.example.kmd_reader.presentation.KmdReaderViewModel
 import com.example.kmd_reader.ui.screen.browse.BrowseDesk
 import com.example.kmd_reader.ui.screen.browse.FilterOverlay
 import com.example.kmd_reader.ui.screen.importkmd.ImportDesk
@@ -34,20 +37,31 @@ import com.example.kmd_reader.ui.screen.work.WorkDetailDesk
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun KmdReaderApp(modifier: Modifier = Modifier) {
-    val repository = remember { MockWorkRepository() }
-    var state by remember {
-        mutableStateOf(KmdReaderState(works = repository.listWorks()))
-    }
-    val dispatch: (KmdReaderAction) -> Unit = { action ->
-        state = KmdReaderReducer.reduce(state, action)
-    }
+fun KmdReaderApp(
+    modifier: Modifier = Modifier,
+    viewModel: KmdReaderViewModel = viewModel()
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val dispatch: (KmdReaderAction) -> Unit = viewModel::onAction
 
     val desks = state.deskStack.desks
     val pagerState = rememberPagerState(initialPage = state.deskStack.activeIndex) { desks.size }
     val latestActiveIndex by rememberUpdatedState(state.deskStack.activeIndex)
     val latestLastIndex by rememberUpdatedState(desks.lastIndex)
     var programmaticTargetPage by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(viewModel) {
+        viewModel.effectFlow.collect { effect ->
+            when (effect) {
+                is KmdReaderEffect.ShowMessage -> {
+                    Toast.makeText(context, effect.message, Toast.LENGTH_SHORT).show()
+                }
+                is KmdReaderEffect.LoadRuntime -> Unit
+                KmdReaderEffect.OpenImportPicker -> Unit
+            }
+        }
+    }
 
     LaunchedEffect(state.deskStack.activeIndex, desks.size) {
         val targetPage = state.deskStack.activeIndex.coerceIn(0, desks.lastIndex)
@@ -132,6 +146,7 @@ fun KmdReaderApp(modifier: Modifier = Modifier) {
 
                         Desk.Reader -> ReaderDesk(
                             work = state.selectedWork,
+                            readerSession = state.readerSession,
                             onOpenReview = { dispatch(KmdReaderAction.OpenReview) }
                         )
 
@@ -157,7 +172,7 @@ fun KmdReaderApp(modifier: Modifier = Modifier) {
                 val work = state.selectedWork
                 ReviewOverlay(
                     work = work,
-                    issues = work?.let { repository.listIssues(it.id) }.orEmpty(),
+                    issues = work?.let { state.issuesByWorkId[it.id] }.orEmpty(),
                     reviewMessage = state.deskStack.reviewMessage,
                     onDecision = { dispatch(KmdReaderAction.SetReviewMessage(it)) },
                     onClose = { dispatch(KmdReaderAction.CloseReview) }

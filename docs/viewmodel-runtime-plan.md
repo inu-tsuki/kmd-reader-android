@@ -2,7 +2,7 @@
 
 > 项目阶段：第三阶段之后的应用骨架规划
 > 文档状态：草案
-> 最近更新：2026-05-13
+> 最近更新：2026-05-14
 
 ## 1. 目标
 
@@ -358,6 +358,18 @@ ReaderDesk
 
 目标：不改变视觉效果，只移动状态边界。
 
+实现状态：已完成。
+
+当前已落地：
+
+- `presentation/KmdReaderViewModel.kt`
+- `presentation/KmdReaderEffect.kt`
+- `presentation/ReaderSessionState.kt`
+- `KmdReaderApp` 通过 `collectAsStateWithLifecycle()` 绑定 `StateFlow<KmdReaderState>`。
+- `ReviewOverlay` 从 `state.issuesByWorkId` 读取问题列表，不再直接访问 repository。
+- `ReaderDesk` 读取 `ReaderSessionState`，当前使用 Fake Runtime 状态占位。
+- `WorkRepository` 已统一为 suspend 接口，mock 与 offline-first repository 共用同一边界。
+
 1. 新增 `KmdReaderViewModel`。
 2. 引入 lifecycle ViewModel Compose 依赖。
 3. 将 `KmdReaderApp` 的 `remember + mutableStateOf` 替换为 `viewModel.state.collectAsStateWithLifecycle()`。
@@ -366,13 +378,24 @@ ReaderDesk
 
 验收：
 
-- UI 行为不退化。
-- 页面切换 bug 不复发。
-- reducer 测试仍可单独写。
+- `./gradlew :app:testDebugUnitTest` 通过。
+- `./gradlew :app:assembleDebug` 通过。
+- UI 行为保持原有页面条带模型。
+- reducer 仍是纯函数，ViewModel 测试覆盖初始化、打开作品、进入阅读状态。
 
 ### 阶段 B：ViewModel 接入 OfflineFirst Repository
 
 目标：浏览页显示 API/Room 数据。
+
+实现状态：已完成基础接入。
+
+当前已落地：
+
+- `data/KmdReaderAppContainer.kt` 负责创建 Room、Retrofit 和 Repository。
+- `data/repository/FallbackWorkRepository.kt` 负责 primary 数据源为空或失败时回退到 mock。
+- `MainActivity` 通过 `KmdReaderViewModel.Factory` 注入真实 `WorkRepository`。
+- `NetworkModule` 使用 Android 模拟器地址 `http://10.0.2.2:3000/`，并缩短本地开发超时，避免后端未启动时 App 长时间等待。
+- `AndroidManifest.xml` 已允许本地 HTTP 明文流量，用于课程阶段联调。
 
 1. 创建简单的 dependency provider。
 2. ViewModel 初始化时调用 `repository.listWorks(refresh = true)`。
@@ -382,12 +405,27 @@ ReaderDesk
 
 验收：
 
-- 开启 `kmd-community-api` 后，浏览页显示远端 seed 数据。
-- 断开 API 后，Room 缓存仍可显示。
+- `./gradlew :app:testDebugUnitTest` 通过。
+- `./gradlew :app:assembleDebug` 通过。
+- 开启 `kmd-community-api` 后，Repository 可刷新远端 seed 数据并写入 Room。
+- 断开 API 或 Room 为空时，UI 仍可显示 mock fallback 数据，保证课堂演示不崩。
 
 ### 阶段 C：Runtime Bridge 假实现
 
 目标：先让 ViewModel 与 runtime event 模型跑通。
+
+实现状态：已完成 fake runtime bridge。
+
+当前已落地：
+
+- `runtime/ReaderRuntimeBridge.kt`
+- `runtime/ReaderRuntimeEvent.kt`
+- `runtime/ReaderRuntimeModels.kt`
+- `runtime/FakeReaderRuntimeBridge.kt`
+- `KmdReaderViewModel` 监听 `ReaderRuntimeEvent`，并由事件更新 `ReaderSessionState`。
+- `OpenReader` 后进入 `Loading`，随后由 fake bridge 发出 `Ready` 与 `ProgressChanged`。
+- `OpenReview` 时，如果当前阅读会话已就绪，会调用 `setInspectionEnabled(true)` 并合并 `InspectionReported` 问题。
+- `KmdReaderAppContainer` 注入 `ReaderRuntimeBridge`，当前实现为 `FakeReaderRuntimeBridge`。
 
 1. 新增 `runtime/` 包和 bridge 接口。
 2. 新增 `FakeReaderRuntimeBridge`。
@@ -397,6 +435,9 @@ ReaderDesk
 
 验收：
 
+- `./gradlew :app:testDebugUnitTest` 通过。
+- `FakeReaderRuntimeBridgeTest` 覆盖 load 与 inspection 事件。
+- `KmdReaderViewModelTest` 覆盖进入阅读和合并 runtime inspection issue。
 - 不接 WebView 也能测试 reader session。
 - 审阅浮层可显示 runtime 报告的问题。
 
@@ -443,11 +484,13 @@ ReaderDesk
 
 ## 10. 下一步建议
 
-下一次实现优先做阶段 A：
+下一次实现优先做阶段 B：
 
 ```text
-KmdReaderApp remember state
-  -> KmdReaderViewModel StateFlow
+KmdReaderViewModel MockWorkRepository
+  -> dependency provider
+  -> OfflineFirstWorkRepository
+  -> Room + Retrofit + mock fallback
 ```
 
-这是最小但最关键的一步。它不碰 WebView，不碰 runtime 复杂性，却能先把 UI、Repository、异步状态和后续 runtime event 的入口摆正。
+这会让第四阶段的“ViewModel + StateFlow 将 Repository 数据展示到 UI”更有说服力：没有后端时使用 mock/缓存，有后端时使用 `kmd-community-api` 刷新 Room。

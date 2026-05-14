@@ -6,6 +6,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import java.util.concurrent.TimeUnit
 
 object NetworkModule {
     const val EmulatorBaseUrl = "http://10.0.2.2:3000/"
@@ -19,6 +20,9 @@ object NetworkModule {
         enableLogging: Boolean = true
     ): KmdCommunityApi {
         val client = OkHttpClient.Builder()
+            .connectTimeout(1500, TimeUnit.MILLISECONDS)
+            .readTimeout(2500, TimeUnit.MILLISECONDS)
+            .callTimeout(3000, TimeUnit.MILLISECONDS)
             .apply {
                 if (enableLogging) {
                     addInterceptor(

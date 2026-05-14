@@ -2,6 +2,7 @@ package com.example.kmd_reader.data.repository
 
 import com.example.kmd_reader.data.local.ScriptIssueDao
 import com.example.kmd_reader.data.local.WorkDao
+import com.example.kmd_reader.data.WorkRepository
 import com.example.kmd_reader.data.remote.KmdCommunityApi
 import com.example.kmd_reader.data.remote.dto.ReviewRequestDto
 import com.example.kmd_reader.data.remote.dto.ReviewResponseDto
@@ -13,8 +14,8 @@ class OfflineFirstWorkRepository(
     private val issueDao: ScriptIssueDao,
     private val api: KmdCommunityApi,
     private val nowMillis: () -> Long = System::currentTimeMillis
-) {
-    suspend fun listWorks(refresh: Boolean = true): List<Work> {
+) : WorkRepository {
+    override suspend fun listWorks(refresh: Boolean): List<Work> {
         val cached = workDao.getAll().map { it.toDomain() }
         if (!refresh) {
             return cached
@@ -29,7 +30,7 @@ class OfflineFirstWorkRepository(
         }
     }
 
-    suspend fun getWork(id: String, refresh: Boolean = true): Work? {
+    override suspend fun getWork(id: String, refresh: Boolean): Work? {
         val cached = workDao.getById(id)?.toDomain()
         if (!refresh) {
             return cached
@@ -44,7 +45,7 @@ class OfflineFirstWorkRepository(
         }
     }
 
-    suspend fun listIssues(workId: String, refresh: Boolean = true): List<ScriptIssue> {
+    override suspend fun listIssues(workId: String, refresh: Boolean): List<ScriptIssue> {
         val cached = issueDao.getByWorkId(workId).map { it.toDomain() }
         if (!refresh) {
             return cached

@@ -5,6 +5,8 @@ import com.example.kmd_reader.domain.policy.DeskStackPolicy
 object KmdReaderReducer {
     fun reduce(state: KmdReaderState, action: KmdReaderAction): KmdReaderState =
         when (action) {
+            KmdReaderAction.RefreshWorks -> state
+
             KmdReaderAction.OpenMine -> state.copy(
                 deskStack = DeskStackPolicy.openMine(state.deskStack)
             )

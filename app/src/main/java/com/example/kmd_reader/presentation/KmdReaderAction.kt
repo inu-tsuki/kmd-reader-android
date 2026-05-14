@@ -3,6 +3,7 @@ package com.example.kmd_reader.presentation
 import com.example.kmd_reader.domain.model.PresentationMode
 
 sealed interface KmdReaderAction {
+    data object RefreshWorks : KmdReaderAction
     data object OpenMine : KmdReaderAction
     data object OpenBrowse : KmdReaderAction
     data class OpenWork(val workId: String) : KmdReaderAction

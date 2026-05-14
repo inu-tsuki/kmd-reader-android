@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.kmd_reader.domain.model.Work
+import com.example.kmd_reader.presentation.ReaderSessionState
 import com.example.kmd_reader.ui.component.InfoCard
 import com.example.kmd_reader.ui.component.PreviewFrame
 import com.example.kmd_reader.ui.component.SectionTitle
@@ -25,6 +26,7 @@ import com.example.kmd_reader.ui.component.SectionTitle
 @Composable
 fun ReaderDesk(
     work: Work?,
+    readerSession: ReaderSessionState,
     onOpenReview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -46,12 +48,12 @@ fun ReaderDesk(
         SectionTitle("阅读", work.title)
         PreviewFrame(work)
         InfoCard(
-            title = "Reader Runtime 占位",
-            body = "这里未来会加载 @kmd/reader-runtime-web。当前只验证不同作品形态的阅读宿主位置。"
+            title = readerSession.titleText(work.id),
+            body = readerSession.bodyText()
         )
         Box(modifier = Modifier.fillMaxWidth()) {
             LinearProgressIndicator(
-                progress = { 0.42f },
+                progress = { readerSession.progressFor(work.id) },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -74,3 +76,38 @@ fun ReaderDesk(
         )
     }
 }
+
+private fun ReaderSessionState.titleText(workId: String): String =
+    when (this) {
+        ReaderSessionState.Idle -> "Reader Runtime 待机"
+        is ReaderSessionState.Loading -> if (this.workId == workId) {
+            "Reader Runtime 准备中"
+        } else {
+            "Reader Runtime 待机"
+        }
+        is ReaderSessionState.Ready -> if (this.workId == workId) {
+            "Reader Runtime 已就绪"
+        } else {
+            "Reader Runtime 待机"
+        }
+        is ReaderSessionState.Failed -> "Reader Runtime 加载失败"
+    }
+
+private fun ReaderSessionState.bodyText(): String =
+    when (this) {
+        ReaderSessionState.Idle ->
+            "这里未来会加载 @kmd/reader-runtime-web。当前只验证不同作品形态的阅读宿主位置。"
+        is ReaderSessionState.Loading ->
+            "正在创建阅读会话，未来会在这里等待 WebView runtime ready 事件。"
+        is ReaderSessionState.Ready ->
+            "当前是 Fake Runtime 状态。真实 WebView 接入后，会由 ReaderRuntimeBridge 回传进度和检查结果。"
+        is ReaderSessionState.Failed ->
+            message
+    }
+
+private fun ReaderSessionState.progressFor(workId: String): Float =
+    when (this) {
+        is ReaderSessionState.Ready -> if (this.workId == workId) progress else 0f
+        is ReaderSessionState.Loading -> if (this.workId == workId) 0.1f else 0f
+        else -> 0f
+    }
