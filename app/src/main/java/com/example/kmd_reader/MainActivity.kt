@@ -27,7 +27,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             KmdreaderTheme {
-                KmdReaderApp(viewModel = readerViewModel)
+                KmdReaderApp(
+                    viewModel = readerViewModel,
+                    runtimeBridge = appContainer.readerRuntimeBridge
+                )
             }
         }
     }

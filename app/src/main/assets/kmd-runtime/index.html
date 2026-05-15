@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>KMD Reader Runtime Shell</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #07090c;
+      color: #f6f7fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(95, 195, 179, 0.20), transparent 42%),
+        linear-gradient(315deg, rgba(239, 172, 88, 0.16), transparent 40%),
+        #07090c;
+    }
+
+    .stage {
+      position: relative;
+      display: grid;
+      width: 100vw;
+      height: 100vh;
+      padding: 18px;
+      grid-template-rows: auto 1fr auto;
+      gap: 14px;
+    }
+
+    .topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: rgba(246, 247, 251, 0.72);
+    }
+
+    .badge {
+      padding: 4px 8px;
+      border: 1px solid rgba(246, 247, 251, 0.18);
+      border-radius: 999px;
+      color: rgba(246, 247, 251, 0.78);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .content {
+      display: grid;
+      align-content: center;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 8vw, 48px);
+      line-height: 1.05;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      max-width: 680px;
+      color: rgba(246, 247, 251, 0.76);
+      font-size: clamp(13px, 3.2vw, 16px);
+      line-height: 1.6;
+    }
+
+    .meter {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(246, 247, 251, 0.14);
+    }
+
+    .meter > span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #71d6c5, #f2b36d);
+      transition: width 180ms ease;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: rgba(246, 247, 251, 0.68);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <div class="topline">
+      <span class="badge" id="runtime-state">D0 shell</span>
+      <span id="mode">等待作品</span>
+    </div>
+    <section class="content">
+      <h1 id="title">KMD Runtime Host</h1>
+      <p id="description">WebView 已启动。这里暂时不是完整 KMD core，只负责验证 Android 与 JS runtime 的加载、消息和生命周期。</p>
+    </section>
+    <footer>
+      <div class="meter"><span id="progress-bar"></span></div>
+      <div class="status">
+        <span id="position">runtime:idle</span>
+        <span id="playback">paused</span>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    const VERSION = 1;
+    const state = {
+      work: null,
+      progress: 0,
+      playing: false,
+      timer: null,
+      reducedMotion: false,
+      fontScale: 1
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function post(type, payload = {}, id = null) {
+      const message = JSON.stringify({ version: VERSION, id, type, payload });
+      if (window.KmdAndroid && typeof window.KmdAndroid.postMessage === "function") {
+        window.KmdAndroid.postMessage(message);
+      }
+    }
+
+    function render() {
+      const work = state.work;
+      $("title").textContent = work ? work.title : "KMD Runtime Host";
+      $("description").textContent = work
+        ? work.description
+        : "WebView 已启动。这里暂时不是完整 KMD core，只负责验证 Android 与 JS runtime 的加载、消息和生命周期。";
+      $("mode").textContent = work
+        ? `${work.presentation.modeLabel} · ${work.presentation.orientationHintLabel} · ${work.presentation.aspectRatio}`
+        : "等待作品";
+      $("runtime-state").textContent = work ? "runtime:loaded" : "D0 shell";
+      $("progress-bar").style.width = `${Math.round(state.progress * 100)}%`;
+      $("position").textContent = work ? `d0:${work.id}:${state.progress.toFixed(2)}` : "runtime:idle";
+      $("playback").textContent = state.playing ? "playing" : "paused";
+      document.documentElement.style.fontSize = `${16 * state.fontScale}px`;
+    }
+
+    function emitProgress() {
+      if (!state.work) return;
+      post("progressChanged", {
+        workId: state.work.id,
+        progress: state.progress,
+        positionPayload: `d0:${state.work.id}:${state.progress.toFixed(2)}`
+      });
+    }
+
+    function setPlaying(isPlaying) {
+      if (!state.work) return;
+      state.playing = isPlaying;
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+      if (isPlaying) {
+        state.timer = setInterval(() => {
+          state.progress = Math.min(1, state.progress + 0.015);
+          render();
+          emitProgress();
+          if (state.progress >= 1) {
+            setPlaying(false);
+          }
+        }, state.reducedMotion ? 900 : 450);
+      }
+      render();
+      post("playbackStateChanged", {
+        workId: state.work.id,
+        isPlaying: state.playing
+      });
+    }
+
+    function reportInspection() {
+      if (!state.work) return;
+      post("inspectionReported", {
+        workId: state.work.id,
+        issues: [{
+          id: `webview-d0-${state.work.id}`,
+          workId: state.work.id,
+          severity: "Info",
+          source: "Runtime",
+          location: "webview:d0-shell",
+          message: "WebView D0 shell 已完成宿主通信检查。",
+          suggestion: "下一步可以将这条消息替换为真实 reader-runtime-web 的检查结果。"
+        }]
+      });
+    }
+
+    window.KmdRuntime = {
+      receive(rawMessage) {
+        let message;
+        try {
+          message = JSON.parse(rawMessage);
+        } catch (error) {
+          post("error", { message: "Android command is not valid JSON" });
+          return;
+        }
+
+        const payload = message.payload || {};
+        switch (message.type) {
+          case "loadScript":
+            state.work = payload.work;
+            state.progress = 0;
+            state.playing = false;
+            render();
+            post("ready", { workId: state.work.id }, message.id);
+            emitProgress();
+            break;
+          case "play":
+            setPlaying(true);
+            break;
+          case "pause":
+            setPlaying(false);
+            break;
+          case "seek":
+            state.progress = Math.max(0, Math.min(1, Number(payload.progress) || 0));
+            render();
+            emitProgress();
+            break;
+          case "setInspectionEnabled":
+            if (payload.enabled) reportInspection();
+            break;
+          case "updateSettings":
+            state.reducedMotion = Boolean(payload.reducedMotion);
+            state.fontScale = Number(payload.fontScale) || 1;
+            render();
+            break;
+          case "dispose":
+            setPlaying(false);
+            break;
+          default:
+            post("error", {
+              workId: state.work && state.work.id,
+              message: `Unsupported command: ${message.type}`
+            });
+        }
+      }
+    };
+
+    window.addEventListener("error", (event) => {
+      post("error", {
+        workId: state.work && state.work.id,
+        message: event.message || "Runtime shell error"
+      });
+    });
+
+    render();
+    post("runtimeReady", { runtime: "kmd-reader-d0-shell", version: VERSION });
+  </script>
+</body>
+</html>

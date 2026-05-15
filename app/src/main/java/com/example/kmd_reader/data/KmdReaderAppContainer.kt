@@ -5,8 +5,8 @@ import com.example.kmd_reader.data.local.KmdReaderDatabase
 import com.example.kmd_reader.data.remote.NetworkModule
 import com.example.kmd_reader.data.repository.FallbackWorkRepository
 import com.example.kmd_reader.data.repository.OfflineFirstWorkRepository
-import com.example.kmd_reader.runtime.FakeReaderRuntimeBridge
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
+import com.example.kmd_reader.runtime.webview.WebViewReaderRuntimeBridge
 
 class KmdReaderAppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -31,6 +31,6 @@ class KmdReaderAppContainer(context: Context) {
     }
 
     val readerRuntimeBridge: ReaderRuntimeBridge by lazy {
-        FakeReaderRuntimeBridge()
+        WebViewReaderRuntimeBridge()
     }
 }

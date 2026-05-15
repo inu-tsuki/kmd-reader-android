@@ -27,6 +27,7 @@ import com.example.kmd_reader.presentation.Desk
 import com.example.kmd_reader.presentation.KmdReaderAction
 import com.example.kmd_reader.presentation.KmdReaderEffect
 import com.example.kmd_reader.presentation.KmdReaderViewModel
+import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.ui.screen.browse.BrowseDesk
 import com.example.kmd_reader.ui.screen.browse.FilterOverlay
 import com.example.kmd_reader.ui.screen.importkmd.ImportDesk
@@ -39,7 +40,8 @@ import com.example.kmd_reader.ui.screen.work.WorkDetailDesk
 @Composable
 fun KmdReaderApp(
     modifier: Modifier = Modifier,
-    viewModel: KmdReaderViewModel = viewModel()
+    viewModel: KmdReaderViewModel = viewModel(),
+    runtimeBridge: ReaderRuntimeBridge? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -147,6 +149,7 @@ fun KmdReaderApp(
                         Desk.Reader -> ReaderDesk(
                             work = state.selectedWork,
                             readerSession = state.readerSession,
+                            runtimeBridge = runtimeBridge,
                             onOpenReview = { dispatch(KmdReaderAction.OpenReview) }
                         )
 

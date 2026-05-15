@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -16,17 +17,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.kmd_reader.domain.model.OrientationHint
 import com.example.kmd_reader.domain.model.Work
 import com.example.kmd_reader.presentation.ReaderSessionState
+import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.ui.component.InfoCard
-import com.example.kmd_reader.ui.component.PreviewFrame
 import com.example.kmd_reader.ui.component.SectionTitle
 
 @Composable
 fun ReaderDesk(
     work: Work?,
     readerSession: ReaderSessionState,
+    runtimeBridge: ReaderRuntimeBridge?,
     onOpenReview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -46,7 +50,12 @@ fun ReaderDesk(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         SectionTitle("阅读", work.title)
-        PreviewFrame(work)
+        ReaderRuntimeHost(
+            runtimeBridge = runtimeBridge,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(runtimeHostHeight(work))
+        )
         InfoCard(
             title = readerSession.titleText(work.id),
             body = readerSession.bodyText()
@@ -96,11 +105,11 @@ private fun ReaderSessionState.titleText(workId: String): String =
 private fun ReaderSessionState.bodyText(): String =
     when (this) {
         ReaderSessionState.Idle ->
-            "这里未来会加载 @kmd/reader-runtime-web。当前只验证不同作品形态的阅读宿主位置。"
+            "这里会加载本地 WebView Runtime shell，下一步再替换为 @kmd/reader-runtime-web。"
         is ReaderSessionState.Loading ->
-            "正在创建阅读会话，未来会在这里等待 WebView runtime ready 事件。"
+            "正在创建 WebView 阅读会话，并等待 runtime ready 事件。"
         is ReaderSessionState.Ready ->
-            "当前是 Fake Runtime 状态。真实 WebView 接入后，会由 ReaderRuntimeBridge 回传进度和检查结果。"
+            "WebView D0 shell 已通过 ReaderRuntimeBridge 回传进度，审阅入口会触发一次 runtime 检查事件。"
         is ReaderSessionState.Failed ->
             message
     }
@@ -110,4 +119,11 @@ private fun ReaderSessionState.progressFor(workId: String): Float =
         is ReaderSessionState.Ready -> if (this.workId == workId) progress else 0f
         is ReaderSessionState.Loading -> if (this.workId == workId) 0.1f else 0f
         else -> 0f
+    }
+
+private fun runtimeHostHeight(work: Work): Dp =
+    when (work.presentation.orientationHint) {
+        OrientationHint.Portrait -> 360.dp
+        OrientationHint.Landscape -> 220.dp
+        OrientationHint.Adaptive -> 300.dp
     }

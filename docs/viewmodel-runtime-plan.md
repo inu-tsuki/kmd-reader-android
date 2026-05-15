@@ -445,6 +445,23 @@ ReaderDesk
 
 目标：接真实 Web runtime，但保持可替换。
 
+实现状态：D0 已完成基础接入。
+
+当前已落地：
+
+- `runtime/webview/WebViewReaderRuntimeBridge.kt`
+- `runtime/webview/RuntimeMessageCodec.kt`
+- `runtime/webview/RuntimeJavascriptBridge.kt`
+- `ui/screen/reader/ReaderRuntimeHost.kt`
+- 本地 `assets/kmd-runtime/index.html`
+- 阅读页已能加载 WebView D0 shell，并通过 `ReaderRuntimeBridge` 接收 `ready`、`progressChanged`、`inspectionReported`、`error`。
+
+前置审计：
+
+- 先阅读并落实 `docs/core-portability-webview-feasibility.md`。
+- 阶段 D 的第一步不是抽 `apps/editor/src/core`，而是验证 WebView 最小宿主、消息协议和生命周期。
+- 接真实 KMD runtime 前，需要先处理 Vue/Pinia store、静态资源路径、runtime singleton 和 command registry 的边界。
+
 1. 创建 `ReaderRuntimeHost`。
 2. 创建 `WebViewReaderRuntimeBridge`。
 3. 先加载一个极小 HTML runtime shell。
@@ -484,13 +501,13 @@ ReaderDesk
 
 ## 10. 下一步建议
 
-下一次实现优先做阶段 B：
+下一次实现优先做阶段 D0：
 
 ```text
-KmdReaderViewModel MockWorkRepository
-  -> dependency provider
-  -> OfflineFirstWorkRepository
-  -> Room + Retrofit + mock fallback
+ReaderRuntimeHost
+  -> WebViewReaderRuntimeBridge
+  -> local assets/kmd-runtime/index.html
+  -> ready/progressChanged/error message loop
 ```
 
-这会让第四阶段的“ViewModel + StateFlow 将 Repository 数据展示到 UI”更有说服力：没有后端时使用 mock/缓存，有后端时使用 `kmd-community-api` 刷新 Room。
+这会先验证 Android WebView 宿主是否稳定，再决定何时接入真实 KMD reader runtime web 产物。
