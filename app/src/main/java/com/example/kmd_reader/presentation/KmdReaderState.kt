@@ -1,6 +1,7 @@
 package com.example.kmd_reader.presentation
 
 import com.example.kmd_reader.domain.model.PresentationMode
+import com.example.kmd_reader.domain.model.KmdSourceSnapshot
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 
@@ -10,7 +11,13 @@ data class KmdReaderState(
     val searchQuery: String = "",
     val selectedMode: PresentationMode? = null,
     val issuesByWorkId: Map<String, List<ScriptIssue>> = emptyMap(),
+    val sourceSnapshotsByWorkId: Map<String, KmdSourceSnapshot> = emptyMap(),
     val readerSession: ReaderSessionState = ReaderSessionState.Idle,
+    val readerChrome: ReaderChromeState = ReaderChromeState(),
+    val readerCompanion: ReaderCompanionState = ReaderCompanionState(),
+    val issueFocus: IssueFocusState = IssueFocusState(),
+    val readerViewport: ReaderViewportState = ReaderViewportState(),
+    val readerHostRestartToken: Int = 0,
     val isLoadingWorks: Boolean = false,
     val errorMessage: String? = null
 ) {

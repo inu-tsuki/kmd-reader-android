@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
             KmdreaderTheme {
                 KmdReaderApp(
                     viewModel = readerViewModel,
-                    runtimeBridge = appContainer.readerRuntimeBridge
+                    runtimeBridge = readerViewModel.runtimeBridgeForHost
                 )
             }
         }

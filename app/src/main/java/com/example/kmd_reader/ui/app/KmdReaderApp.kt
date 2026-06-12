@@ -1,6 +1,7 @@
 package com.example.kmd_reader.ui.app
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import com.example.kmd_reader.presentation.Desk
 import com.example.kmd_reader.presentation.KmdReaderAction
 import com.example.kmd_reader.presentation.KmdReaderEffect
 import com.example.kmd_reader.presentation.KmdReaderViewModel
+import com.example.kmd_reader.presentation.ReaderCompanionType
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.ui.screen.browse.BrowseDesk
 import com.example.kmd_reader.ui.screen.browse.FilterOverlay
@@ -48,6 +50,8 @@ fun KmdReaderApp(
     val dispatch: (KmdReaderAction) -> Unit = viewModel::onAction
 
     val desks = state.deskStack.desks
+    val activeDesk = desks.getOrNull(state.deskStack.activeIndex)
+    val isReaderActive = activeDesk == Desk.Reader
     val pagerState = rememberPagerState(initialPage = state.deskStack.activeIndex) { desks.size }
     val latestActiveIndex by rememberUpdatedState(state.deskStack.activeIndex)
     val latestLastIndex by rememberUpdatedState(desks.lastIndex)
@@ -103,6 +107,10 @@ fun KmdReaderApp(
         }
     }
 
+    BackHandler(enabled = isReaderActive && state.readerCompanion.active != null) {
+        dispatch(KmdReaderAction.CloseReaderCompanion)
+    }
+
     Surface(
         modifier = modifier
             .fillMaxSize()
@@ -115,15 +123,18 @@ fun KmdReaderApp(
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
             ) {
-                AppTopBar(
-                    desks = desks,
-                    activeIndex = state.deskStack.activeIndex,
-                    onDeskClick = { index -> dispatch(KmdReaderAction.SetActiveDesk(index)) },
-                    onCloseCurrent = { dispatch(KmdReaderAction.CloseCurrentDesk) }
-                )
+                if (!isReaderActive) {
+                    AppTopBar(
+                        desks = desks,
+                        activeIndex = state.deskStack.activeIndex,
+                        onDeskClick = { index -> dispatch(KmdReaderAction.SetActiveDesk(index)) },
+                        onCloseCurrent = { dispatch(KmdReaderAction.CloseCurrentDesk) }
+                    )
+                }
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = !isReaderActive
                 ) { page ->
                     when (desks[page]) {
                         Desk.Mine -> MineDesk(
@@ -149,8 +160,66 @@ fun KmdReaderApp(
                         Desk.Reader -> ReaderDesk(
                             work = state.selectedWork,
                             readerSession = state.readerSession,
+                            readerChrome = state.readerChrome,
+                            readerCompanion = state.readerCompanion,
+                            readerViewport = state.readerViewport,
+                            issues = state.selectedWork
+                                ?.let { state.issuesByWorkId[it.id] }
+                                .orEmpty(),
+                            sourceSnapshot = state.selectedWork
+                                ?.let { state.sourceSnapshotsByWorkId[it.id] },
+                            issueFocus = state.issueFocus,
+                            reviewMessage = state.deskStack.reviewMessage,
+                            readerHostRestartToken = state.readerHostRestartToken,
                             runtimeBridge = runtimeBridge,
-                            onOpenReview = { dispatch(KmdReaderAction.OpenReview) }
+                            onBackToDetail = { dispatch(KmdReaderAction.CloseCurrentDesk) },
+                            onOpenReview = { dispatch(KmdReaderAction.OpenReview) },
+                            onOpenIssues = {
+                                dispatch(KmdReaderAction.OpenReaderCompanion(ReaderCompanionType.Issues))
+                            },
+                            onRetryRuntime = { dispatch(KmdReaderAction.RetryReaderRuntime) },
+                            onReviewDecision = { dispatch(KmdReaderAction.SetReviewMessage(it)) },
+                            onSelectIssue = { dispatch(KmdReaderAction.SelectIssue(it)) },
+                            onSelectSourceLine = {
+                                dispatch(KmdReaderAction.SelectSourceLine(it))
+                            },
+                            onJumpIssueToPlayback = {
+                                dispatch(KmdReaderAction.JumpIssueToPlayback(it))
+                            },
+                            onJumpSelectedSourceLineToPlayback = {
+                                dispatch(KmdReaderAction.JumpSelectedSourceLineToPlayback)
+                            },
+                            onCloseIssue = { dispatch(KmdReaderAction.CloseIssue(it)) },
+                            onReopenIssue = { dispatch(KmdReaderAction.ReopenIssue(it)) },
+                            onStartIssueDraft = {
+                                dispatch(KmdReaderAction.StartIssueDraftFromPlayback)
+                            },
+                            onDraftMessageChange = {
+                                dispatch(KmdReaderAction.UpdateIssueDraftMessage(it))
+                            },
+                            onDraftSuggestionChange = {
+                                dispatch(KmdReaderAction.UpdateIssueDraftSuggestion(it))
+                            },
+                            onSubmitIssueDraft = { dispatch(KmdReaderAction.SubmitIssueDraft) },
+                            onCancelIssueDraft = { dispatch(KmdReaderAction.CancelIssueDraft) },
+                            onCloseCompanion = { dispatch(KmdReaderAction.CloseReaderCompanion) },
+                            onReaderHostSizeChanged = { widthPx, heightPx ->
+                                dispatch(KmdReaderAction.UpdateReaderHostSize(widthPx, heightPx))
+                            },
+                            onPlay = { dispatch(KmdReaderAction.PlayReader) },
+                            onPause = { dispatch(KmdReaderAction.PauseReader) },
+                            onSeek = { dispatch(KmdReaderAction.SeekReader(it)) },
+                            onReaderInteraction = { dispatch(KmdReaderAction.ReaderInteraction()) },
+                            onToggleChrome = {
+                                if (state.readerCompanion.active != null) {
+                                    dispatch(KmdReaderAction.CloseReaderCompanion)
+                                } else {
+                                    dispatch(KmdReaderAction.ToggleReaderChrome())
+                                }
+                            },
+                            onShowChrome = { dispatch(KmdReaderAction.ShowReaderChrome()) },
+                            onDimChrome = { dispatch(KmdReaderAction.DimReaderChrome) },
+                            onSetChromePinned = { dispatch(KmdReaderAction.SetReaderChromePinned(it)) }
                         )
 
                         Desk.Import -> ImportDesk(
@@ -171,7 +240,7 @@ fun KmdReaderApp(
                 )
             }
 
-            if (state.deskStack.isReviewOpen) {
+            if (state.deskStack.isReviewOpen && !isReaderActive) {
                 val work = state.selectedWork
                 ReviewOverlay(
                     work = work,
