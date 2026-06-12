@@ -17,8 +17,45 @@ data class WorkDto(
     val previewMode: String = "cover",
     val estimatedDurationSec: Int,
     val coverUrl: String = "",
+    val script: KmdScriptDto = KmdScriptDto(activeRevisionId = "rev-1"),
+    val assetManifest: RuntimeAssetManifestDto? = null,
     val stats: WorkStatsDto? = null,
     val commentSummary: CommentSummaryDto? = null
+)
+
+@Serializable
+data class KmdScriptDto(
+    val activeRevisionId: String,
+    val sourceUrl: String? = null,
+    val mimeType: String? = null,
+    val kmdVersion: String? = null,
+    val runtimeVersion: String? = null,
+    val contentHash: String? = null,
+    val revisions: List<KmdScriptRevisionDto> = emptyList()
+)
+
+@Serializable
+data class KmdScriptRevisionDto(
+    val id: String,
+    val label: String = "",
+    val sourceUrl: String,
+    val mimeType: String = "text/x-kmd",
+    val kmdVersion: String = "",
+    val runtimeVersion: String = "",
+    val createdAt: String = "",
+    val contentHash: String? = null
+)
+
+@Serializable
+data class RuntimeAssetManifestDto(
+    val baseUrl: String? = null,
+    val assets: Map<String, RuntimeAssetRefDto> = emptyMap()
+)
+
+@Serializable
+data class RuntimeAssetRefDto(
+    val url: String,
+    val type: String? = null
 )
 
 @Serializable

@@ -10,7 +10,7 @@ import androidx.room.RoomDatabase
         WorkEntity::class,
         ScriptIssueEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class KmdReaderDatabase : RoomDatabase() {
@@ -26,7 +26,9 @@ abstract class KmdReaderDatabase : RoomDatabase() {
                 context.applicationContext,
                 KmdReaderDatabase::class.java,
                 DatabaseName
-            ).build()
+            )
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
         }
     }
 }

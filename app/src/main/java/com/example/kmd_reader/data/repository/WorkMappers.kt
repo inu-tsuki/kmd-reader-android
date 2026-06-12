@@ -3,6 +3,9 @@ package com.example.kmd_reader.data.repository
 import com.example.kmd_reader.data.local.ScriptIssueEntity
 import com.example.kmd_reader.data.local.WorkEntity
 import com.example.kmd_reader.data.remote.dto.ScriptIssueDto
+import com.example.kmd_reader.data.remote.dto.KmdScriptRevisionDto
+import com.example.kmd_reader.data.remote.dto.RuntimeAssetManifestDto
+import com.example.kmd_reader.data.remote.dto.RuntimeAssetRefDto
 import com.example.kmd_reader.data.remote.dto.WorkDto
 import com.example.kmd_reader.data.remote.dto.WorkStatsDto
 import com.example.kmd_reader.domain.model.CommentSummary
@@ -11,17 +14,22 @@ import com.example.kmd_reader.domain.model.EffectIntensity
 import com.example.kmd_reader.domain.model.InteractionLevel
 import com.example.kmd_reader.domain.model.IssueSeverity
 import com.example.kmd_reader.domain.model.IssueSource
+import com.example.kmd_reader.domain.model.KmdScriptRef
+import com.example.kmd_reader.domain.model.KmdScriptRevision
 import com.example.kmd_reader.domain.model.OrientationHint
 import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.PreviewMode
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
+import com.example.kmd_reader.domain.model.WorkAssetManifest
+import com.example.kmd_reader.domain.model.WorkAssetRef
 import com.example.kmd_reader.domain.model.WorkAttributes
 import com.example.kmd_reader.domain.model.WorkLifecycleStatus
 import com.example.kmd_reader.domain.model.WorkPresentation
 import com.example.kmd_reader.domain.model.WorkSourceType
 
 private const val ListSeparator = "\u001F"
+private const val FieldSeparator = "\u001E"
 
 fun Work.toEntity(syncedAt: Long): WorkEntity {
     return WorkEntity(
@@ -40,6 +48,16 @@ fun Work.toEntity(syncedAt: Long): WorkEntity {
         previewMode = presentation.previewMode.name,
         contentUri = contentUri,
         previewUri = previewUri,
+        activeRevisionId = script.activeRevisionId,
+        scriptRevisionLabel = script.activeRevision.label,
+        scriptSourceUrl = script.activeRevision.sourceUrl,
+        scriptMimeType = script.activeRevision.mimeType,
+        scriptKmdVersion = script.activeRevision.kmdVersion,
+        scriptRuntimeVersion = script.activeRevision.runtimeVersion,
+        scriptRevisionCreatedAt = script.activeRevision.createdAt,
+        scriptContentHash = script.activeRevision.contentHash,
+        assetManifestBaseUrl = assetManifest?.baseUrl,
+        assetManifestAssets = assetManifest?.assets.orEmpty().packAssetRefs(),
         estimatedDurationSec = estimatedDurationSec,
         effectIntensity = attributes.effectIntensity.name,
         commandCount = attributes.commandCount,
@@ -55,6 +73,8 @@ fun Work.toEntity(syncedAt: Long): WorkEntity {
 
 fun WorkDto.toEntity(syncedAt: Long): WorkEntity {
     val stats = stats ?: WorkStatsDto()
+    val activeRevision = activeRevisionOrFallback()
+    val assetManifest = assetManifest?.toDomain()
     return WorkEntity(
         id = id,
         title = title,
@@ -69,14 +89,24 @@ fun WorkDto.toEntity(syncedAt: Long): WorkEntity {
         aspectRatio = aspectRatio,
         interactionLevel = interactionLevelFromApi(interactionLevel).name,
         previewMode = previewModeFromApi(previewMode).name,
-        contentUri = "community/$id.kmd",
+        contentUri = activeRevision.sourceUrl,
         previewUri = coverUrl.ifBlank { null },
+        activeRevisionId = activeRevision.id,
+        scriptRevisionLabel = activeRevision.label,
+        scriptSourceUrl = activeRevision.sourceUrl,
+        scriptMimeType = activeRevision.mimeType,
+        scriptKmdVersion = activeRevision.kmdVersion,
+        scriptRuntimeVersion = activeRevision.runtimeVersion,
+        scriptRevisionCreatedAt = activeRevision.createdAt,
+        scriptContentHash = activeRevision.contentHash,
+        assetManifestBaseUrl = assetManifest?.baseUrl,
+        assetManifestAssets = assetManifest?.assets.orEmpty().packAssetRefs(),
         estimatedDurationSec = estimatedDurationSec,
         effectIntensity = effectIntensityFromStats(stats).name,
         commandCount = stats.lines,
         externalAssetCount = 0,
         complexityLevel = complexityLevelFromStats(stats).name,
-        runtimeVersion = "community-api",
+        runtimeVersion = activeRevision.runtimeVersion.ifBlank { "community-api" },
         commentSummary = commentSummary?.toDomainSummary().orEmpty(),
         commentHighlights = commentSummary?.preview.orEmpty().packList(),
         commentConcerns = emptyList<String>().packList(),
@@ -103,6 +133,8 @@ fun WorkEntity.toDomain(): Work {
         ),
         contentUri = contentUri,
         previewUri = previewUri,
+        script = scriptRefFromEntity(),
+        assetManifest = assetManifestFromEntity(),
         estimatedDurationSec = estimatedDurationSec,
         attributes = WorkAttributes(
             effectIntensity = enumValueOrDefault(effectIntensity, EffectIntensity.Medium),
@@ -116,6 +148,52 @@ fun WorkEntity.toDomain(): Work {
             highlights = commentHighlights.unpackList(),
             concerns = commentConcerns.unpackList()
         )
+    )
+}
+
+private fun WorkDto.activeRevisionOrFallback(): KmdScriptRevisionDto {
+    val activeRevision = script.revisions.firstOrNull { it.id == script.activeRevisionId }
+    if (activeRevision != null) {
+        return activeRevision
+    }
+
+    return KmdScriptRevisionDto(
+        id = script.activeRevisionId.ifBlank { "rev-1" },
+        label = "Active KMD script",
+        sourceUrl = script.sourceUrl ?: "/works/$id/source",
+        mimeType = script.mimeType ?: "text/x-kmd",
+        kmdVersion = script.kmdVersion.orEmpty(),
+        runtimeVersion = script.runtimeVersion.orEmpty(),
+        createdAt = "",
+        contentHash = script.contentHash
+    )
+}
+
+private fun WorkEntity.scriptRefFromEntity(): KmdScriptRef {
+    val revision = KmdScriptRevision(
+        id = activeRevisionId.ifBlank { "rev-1" },
+        label = scriptRevisionLabel,
+        sourceUrl = scriptSourceUrl.ifBlank { contentUri },
+        mimeType = scriptMimeType.ifBlank { "text/x-kmd" },
+        kmdVersion = scriptKmdVersion,
+        runtimeVersion = scriptRuntimeVersion.ifBlank { runtimeVersion },
+        createdAt = scriptRevisionCreatedAt,
+        contentHash = scriptContentHash
+    )
+    return KmdScriptRef(
+        activeRevisionId = revision.id,
+        activeRevision = revision
+    )
+}
+
+private fun WorkEntity.assetManifestFromEntity(): WorkAssetManifest? {
+    val assets = assetManifestAssets.unpackAssetRefs()
+    if (assetManifestBaseUrl.isNullOrBlank() && assets.isEmpty()) {
+        return null
+    }
+    return WorkAssetManifest(
+        baseUrl = assetManifestBaseUrl,
+        assets = assets
     )
 }
 
@@ -165,6 +243,42 @@ private fun String.unpackList(): List<String> {
     }
     return split(ListSeparator)
 }
+
+private fun Map<String, WorkAssetRef>.packAssetRefs(): String {
+    if (isEmpty()) {
+        return ""
+    }
+    return entries.joinToString(ListSeparator) { (key, asset) ->
+        listOf(key, asset.url, asset.type.orEmpty()).joinToString(FieldSeparator)
+    }
+}
+
+private fun String.unpackAssetRefs(): Map<String, WorkAssetRef> {
+    if (isBlank()) {
+        return emptyMap()
+    }
+    return split(ListSeparator).mapNotNull { entry ->
+        val fields = entry.split(FieldSeparator)
+        val key = fields.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val url = fields.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        key to WorkAssetRef(
+            url = url,
+            type = fields.getOrNull(2)?.takeIf { it.isNotBlank() }
+        )
+    }.toMap()
+}
+
+private fun RuntimeAssetManifestDto.toDomain(): WorkAssetManifest =
+    WorkAssetManifest(
+        baseUrl = baseUrl,
+        assets = assets.mapValues { (_, asset) -> asset.toDomain() }
+    )
+
+private fun RuntimeAssetRefDto.toDomain(): WorkAssetRef =
+    WorkAssetRef(
+        url = url,
+        type = type
+    )
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T {
     return enumValues<T>().firstOrNull { it.name == name } ?: fallback

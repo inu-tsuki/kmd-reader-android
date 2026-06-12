@@ -12,9 +12,38 @@ data class Work(
     val presentation: WorkPresentation,
     val contentUri: String,
     val previewUri: String?,
+    val script: KmdScriptRef,
+    val assetManifest: WorkAssetManifest? = null,
     val estimatedDurationSec: Int,
     val attributes: WorkAttributes,
     val commentSummary: CommentSummary
+)
+
+data class KmdScriptRef(
+    val activeRevisionId: String,
+    val activeRevision: KmdScriptRevision,
+    val revisions: List<KmdScriptRevision> = listOf(activeRevision)
+)
+
+data class KmdScriptRevision(
+    val id: String,
+    val label: String,
+    val sourceUrl: String,
+    val mimeType: String,
+    val kmdVersion: String,
+    val runtimeVersion: String,
+    val createdAt: String,
+    val contentHash: String? = null
+)
+
+data class WorkAssetManifest(
+    val baseUrl: String? = null,
+    val assets: Map<String, WorkAssetRef> = emptyMap()
+)
+
+data class WorkAssetRef(
+    val url: String,
+    val type: String? = null
 )
 
 data class WorkPresentation(

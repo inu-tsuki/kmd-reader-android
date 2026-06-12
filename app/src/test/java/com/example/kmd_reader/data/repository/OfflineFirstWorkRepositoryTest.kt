@@ -7,6 +7,8 @@ import com.example.kmd_reader.data.local.WorkEntity
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.data.remote.KmdCommunityApi
 import com.example.kmd_reader.data.remote.dto.CommentSummaryDto
+import com.example.kmd_reader.data.remote.dto.KmdScriptDto
+import com.example.kmd_reader.data.remote.dto.KmdScriptRevisionDto
 import com.example.kmd_reader.data.remote.dto.ReviewRequestDto
 import com.example.kmd_reader.data.remote.dto.ReviewResponseDto
 import com.example.kmd_reader.data.remote.dto.ScriptIssueDto
@@ -16,6 +18,9 @@ import com.example.kmd_reader.domain.model.IssueSource
 import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.WorkSourceType
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -38,6 +43,7 @@ class OfflineFirstWorkRepositoryTest {
         assertEquals("glass-rail", works.single().id)
         assertEquals(WorkSourceType.Remote, works.single().sourceType)
         assertEquals(PresentationMode.Stage, works.single().presentation.mode)
+        assertEquals("/works/glass-rail/source", works.single().script.activeRevision.sourceUrl)
         assertEquals(42L, requireNotNull(workDao.getById("glass-rail")).syncedAt)
     }
 
@@ -92,6 +98,20 @@ class OfflineFirstWorkRepositoryTest {
         assertEquals(99L, issueDao.getByWorkId("glass-rail").single().syncedAt)
     }
 
+    @Test
+    fun getWorkSourceReadsActiveKmdSourceFromApi() = runTest {
+        val repository = OfflineFirstWorkRepository(
+            workDao = FakeWorkDao(),
+            issueDao = FakeScriptIssueDao(),
+            api = FakeKmdCommunityApi(source = "Glass Rail\n\nsource from api"),
+            nowMillis = { 99L }
+        )
+
+        val source = repository.getWorkSource(workId = "glass-rail", refresh = true)
+
+        assertEquals("Glass Rail\n\nsource from api", source)
+    }
+
     private fun remoteWork(): WorkDto {
         return WorkDto(
             id = "glass-rail",
@@ -107,6 +127,20 @@ class OfflineFirstWorkRepositoryTest {
             previewMode = "clip",
             estimatedDurationSec = 360,
             coverUrl = "/assets/covers/glass-rail.jpg",
+            script = KmdScriptDto(
+                activeRevisionId = "rev-1",
+                revisions = listOf(
+                    KmdScriptRevisionDto(
+                        id = "rev-1",
+                        label = "Submitted stage preview script",
+                        sourceUrl = "/works/glass-rail/source",
+                        mimeType = "text/x-kmd",
+                        kmdVersion = "0.1",
+                        runtimeVersion = "0.2-preview",
+                        createdAt = "2026-05-20T00:00:00.000Z"
+                    )
+                )
+            ),
             stats = WorkStatsDto(scenes = 9, lines = 132, effects = 37),
             commentSummary = CommentSummaryDto(
                 count = 6,
@@ -184,6 +218,7 @@ private class FakeKmdCommunityApi(
     private val works: List<WorkDto> = emptyList(),
     private val work: WorkDto? = null,
     private val issues: List<ScriptIssueDto> = emptyList(),
+    private val source: String = "",
     private val failWorks: Boolean = false
 ) : KmdCommunityApi {
     override suspend fun getWorks(): List<WorkDto> {
@@ -195,6 +230,14 @@ private class FakeKmdCommunityApi(
 
     override suspend fun getWork(id: String): WorkDto {
         return work ?: works.first { it.id == id }
+    }
+
+    override suspend fun getWorkSource(id: String): ResponseBody {
+        return source.toResponseBody("text/x-kmd; charset=utf-8".toMediaType())
+    }
+
+    override suspend fun getRevisionSource(id: String, revisionId: String): ResponseBody {
+        return getWorkSource(id)
     }
 
     override suspend fun getIssues(id: String): List<ScriptIssueDto> {

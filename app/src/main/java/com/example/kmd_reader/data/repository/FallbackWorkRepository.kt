@@ -33,4 +33,10 @@ class FallbackWorkRepository(
             fallback.listIssues(workId = workId, refresh = false)
         }
     }
+
+    override suspend fun getWorkSource(workId: String, refresh: Boolean): String? {
+        return runCatching {
+            primary.getWorkSource(workId = workId, refresh = refresh)
+        }.getOrNull() ?: fallback.getWorkSource(workId = workId, refresh = false)
+    }
 }

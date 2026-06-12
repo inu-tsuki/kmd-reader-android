@@ -60,6 +60,12 @@ class OfflineFirstWorkRepository(
         }
     }
 
+    override suspend fun getWorkSource(workId: String, refresh: Boolean): String? {
+        return runCatching {
+            api.getWorkSource(workId).string()
+        }.getOrNull()
+    }
+
     suspend fun submitReview(request: ReviewRequestDto): ReviewResponseDto {
         return api.submitReview(request)
     }

@@ -16,5 +16,7 @@ class WorkMappersTest {
         assertEquals(PresentationMode.Stage, restored.presentation.mode)
         assertEquals(work.presentation.orientationHint, restored.presentation.orientationHint)
         assertEquals(work.commentSummary.concerns, restored.commentSummary.concerns)
+        assertEquals(work.script.activeRevision.sourceUrl, restored.script.activeRevision.sourceUrl)
+        assertEquals(work.script.activeRevision.runtimeVersion, restored.script.activeRevision.runtimeVersion)
     }
 }

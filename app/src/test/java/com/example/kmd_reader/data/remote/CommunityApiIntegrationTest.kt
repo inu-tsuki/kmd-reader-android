@@ -68,6 +68,9 @@ class CommunityApiIntegrationTest {
         assertTrue(issues.isNotEmpty())
         assertTrue(issues.any { it.source == IssueSource.Performance })
         assertEquals(works.size, repository.listWorks(refresh = false).size)
+
+        val source = repository.getWorkSource(workId = "glass-rail", refresh = true)
+        assertTrue(requireNotNull(source).contains("Glass Rail"))
     }
 
     @Test

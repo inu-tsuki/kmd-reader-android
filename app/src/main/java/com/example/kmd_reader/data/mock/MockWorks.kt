@@ -6,6 +6,8 @@ import com.example.kmd_reader.domain.model.EffectIntensity
 import com.example.kmd_reader.domain.model.InteractionLevel
 import com.example.kmd_reader.domain.model.IssueSeverity
 import com.example.kmd_reader.domain.model.IssueSource
+import com.example.kmd_reader.domain.model.KmdScriptRef
+import com.example.kmd_reader.domain.model.KmdScriptRevision
 import com.example.kmd_reader.domain.model.OrientationHint
 import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.PreviewMode
@@ -36,6 +38,11 @@ object MockWorks {
             ),
             contentUri = "mock/rain-city.kmd",
             previewUri = null,
+            script = scriptRef(
+                workId = "rain-city",
+                title = "Initial mobile reading script",
+                runtimeVersion = "0.2-preview"
+            ),
             estimatedDurationSec = 210,
             attributes = WorkAttributes(
                 effectIntensity = EffectIntensity.Medium,
@@ -68,6 +75,11 @@ object MockWorks {
             ),
             contentUri = "mock/star-manual.kmd",
             previewUri = null,
+            script = scriptRef(
+                workId = "star-manual",
+                title = "Paged manual script",
+                runtimeVersion = "0.2-preview"
+            ),
             estimatedDurationSec = 360,
             attributes = WorkAttributes(
                 effectIntensity = EffectIntensity.Low,
@@ -100,6 +112,11 @@ object MockWorks {
             ),
             contentUri = "mock/glass-rail.kmd",
             previewUri = null,
+            script = scriptRef(
+                workId = "glass-rail",
+                title = "Submitted stage preview script",
+                runtimeVersion = "0.2-preview"
+            ),
             estimatedDurationSec = 150,
             attributes = WorkAttributes(
                 effectIntensity = EffectIntensity.High,
@@ -132,6 +149,11 @@ object MockWorks {
             ),
             contentUri = "local/choice-room.kmd",
             previewUri = null,
+            script = scriptRef(
+                workId = "choice-room",
+                title = "Local interactive draft",
+                runtimeVersion = "0.2-preview"
+            ),
             estimatedDurationSec = 420,
             attributes = WorkAttributes(
                 effectIntensity = EffectIntensity.Medium,
@@ -181,4 +203,24 @@ object MockWorks {
             )
         )
     )
+
+    private fun scriptRef(
+        workId: String,
+        title: String,
+        runtimeVersion: String
+    ): KmdScriptRef {
+        val revision = KmdScriptRevision(
+            id = "rev-1",
+            label = title,
+            sourceUrl = "/works/$workId/source",
+            mimeType = "text/x-kmd",
+            kmdVersion = "0.1",
+            runtimeVersion = runtimeVersion,
+            createdAt = "2026-05-20T00:00:00.000Z"
+        )
+        return KmdScriptRef(
+            activeRevisionId = revision.id,
+            activeRevision = revision
+        )
+    }
 }

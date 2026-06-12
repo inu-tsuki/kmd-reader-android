@@ -1,5 +1,6 @@
 package com.example.kmd_reader.data
 
+import com.example.kmd_reader.data.mock.MockKmdSources
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
@@ -12,4 +13,7 @@ class MockWorkRepository : WorkRepository {
 
     override suspend fun listIssues(workId: String, refresh: Boolean): List<ScriptIssue> =
         MockWorks.issues[workId].orEmpty()
+
+    override suspend fun getWorkSource(workId: String, refresh: Boolean): String? =
+        MockKmdSources.sourceFor(workId)
 }

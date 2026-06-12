@@ -7,4 +7,5 @@ interface WorkRepository {
     suspend fun listWorks(refresh: Boolean = true): List<Work>
     suspend fun getWork(id: String, refresh: Boolean = true): Work?
     suspend fun listIssues(workId: String, refresh: Boolean = true): List<ScriptIssue>
+    suspend fun getWorkSource(workId: String, refresh: Boolean = true): String? = null
 }
