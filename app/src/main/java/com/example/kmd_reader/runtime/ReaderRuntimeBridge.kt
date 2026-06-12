@@ -7,6 +7,8 @@ interface ReaderRuntimeBridge {
 
     suspend fun attach()
 
+    fun prepareLoad(workId: String) = Unit
+
     suspend fun load(request: ReaderLoadRequest)
 
     suspend fun play()
@@ -18,6 +20,8 @@ interface ReaderRuntimeBridge {
     suspend fun setInspectionEnabled(enabled: Boolean)
 
     suspend fun updateSettings(settings: ReaderSettings)
+
+    fun debugSnapshot(): String? = null
 
     fun dispose()
 }

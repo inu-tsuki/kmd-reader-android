@@ -1,3 +1,14 @@
+import org.gradle.api.tasks.Sync
+
+val runtimeDebugProbesEnabled = providers.gradleProperty("kmd.runtimeDebugProbes")
+    .map { it.equals("true", ignoreCase = true).toString() }
+    .orElse("false")
+
+val generatedReaderRuntimeAssetsDir = layout.buildDirectory
+    .dir("generated/assets/readerRuntime")
+    .get()
+    .asFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -24,8 +35,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField(
+                "boolean",
+                "RUNTIME_VISUAL_DEBUG_PROBES",
+                runtimeDebugProbesEnabled.get()
+            )
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("boolean", "RUNTIME_VISUAL_DEBUG_PROBES", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -37,7 +56,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
+        buildConfig = true
         compose = true
+    }
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(generatedReaderRuntimeAssetsDir)
+        }
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
@@ -52,6 +77,21 @@ android {
             )
         }
     }
+}
+
+val readerRuntimeDistDir = rootProject.layout.projectDirectory.dir("../../dist/reader-runtime")
+val syncReaderRuntimeDist by tasks.registering(Sync::class) {
+    onlyIf {
+        readerRuntimeDistDir.asFile.resolve("index.html").isFile
+    }
+    from(readerRuntimeDistDir) {
+        into("reader-runtime")
+    }
+    into(generatedReaderRuntimeAssetsDir)
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncReaderRuntimeDist)
 }
 
 dependencies {

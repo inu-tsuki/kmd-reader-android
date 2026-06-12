@@ -161,7 +161,8 @@
       post("progressChanged", {
         workId: state.work.id,
         progress: state.progress,
-        positionPayload: `d0:${state.work.id}:${state.progress.toFixed(2)}`
+        positionPayload: `d0:${state.work.id}:${state.progress.toFixed(2)}`,
+        durationMs: Number(state.work.estimatedDurationSec || 0) * 1000
       });
     }
 
@@ -185,7 +186,8 @@
       render();
       post("playbackStateChanged", {
         workId: state.work.id,
-        isPlaying: state.playing
+        isPlaying: state.playing,
+        state: state.playing ? "playing" : (state.progress >= 1 ? "ended" : "paused")
       });
     }
 
@@ -218,11 +220,24 @@
         const payload = message.payload || {};
         switch (message.type) {
           case "loadScript":
+            if (!payload.source && !payload.sourceUrl && !payload.assetManifest) {
+              post("error", {
+                workId: payload.work && payload.work.id,
+                code: "SCRIPT_SOURCE_MISSING",
+                message: "loadScript requires source, controlled sourceUrl, or assetManifest.",
+                commandId: message.id,
+                recoverable: true
+              }, message.id);
+              return;
+            }
             state.work = payload.work;
             state.progress = 0;
             state.playing = false;
             render();
-            post("ready", { workId: state.work.id }, message.id);
+            post("ready", {
+              workId: state.work.id,
+              durationMs: Number(state.work.estimatedDurationSec || 0) * 1000
+            }, message.id);
             emitProgress();
             break;
           case "play":
@@ -264,7 +279,20 @@
     });
 
     render();
-    post("runtimeReady", { runtime: "kmd-reader-d0-shell", version: VERSION });
+    post("runtimeReady", {
+      runtime: "kmd-reader-d0-shell",
+      version: VERSION,
+      capabilities: {
+        protocolVersion: VERSION,
+        supportsSourceText: true,
+        supportsSourceUrl: false,
+        supportsAssetManifest: false,
+        supportsSeekTime: false,
+        supportsTimelineMarkers: false,
+        supportsInspection: true,
+        supportsInteractiveSegments: false
+      }
+    });
   </script>
 </body>
 </html>
