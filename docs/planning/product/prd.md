@@ -501,13 +501,18 @@ Web Runtime 需要向 Android 侧回传：
 推荐目录形态：
 
 ```text
-kmd/
+kmd-reader-android/
+  app/
   docs/
-    android-reader/
-      kmd-reader-android-prd.md
+    README.md
+    planning/
+      product/prd.md
+      roadmap.md
+    knowledge/
+      architecture/
 ```
 
-Android 课程仓库建议单独创建为 `kmd-reader-android/`。其中 `reader-runtime/` 用于放置由 KMD 主仓库构建出的阅读器静态资源。课程项目初期可以使用构建产物复制方式，后续再演进为自动构建和包引用。
+Android 课程仓库建议单独创建为 `kmd-reader-android/`。真实阅读器静态资源由 KMD 主仓库构建为 `dist/reader-runtime/`，Android 侧在构建时同步到 APK assets；课程项目初期可以使用构建产物复制方式，后续再演进为自动构建和包引用。
 
 ## 14. 版本规划
 

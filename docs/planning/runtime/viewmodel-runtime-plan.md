@@ -445,7 +445,7 @@ ReaderDesk
 
 目标：接真实 Web runtime，但保持可替换。
 
-实现状态：D0 已完成基础接入。
+实现状态：D0 已完成基础接入；Phase R smoke 已接入 `dist/reader-runtime` 产物消费。
 
 当前已落地：
 
@@ -455,10 +455,12 @@ ReaderDesk
 - `ui/screen/reader/ReaderRuntimeHost.kt`
 - 本地 `assets/kmd-runtime/index.html`
 - 阅读页已能加载 WebView D0 shell，并通过 `ReaderRuntimeBridge` 接收 `ready`、`progressChanged`、`inspectionReported`、`error`。
+- 若主仓库存在 `dist/reader-runtime/`，Android Gradle 会在 `preBuild` 阶段同步到 APK `assets/reader-runtime/`，并优先加载真实 `reader-runtime-web` bundle。
+- 真实 bundle 通过本地 HTTPS 虚拟域名 `https://kmd-reader-runtime.local/reader-runtime/index.html` 加载，WebView request 拦截器映射到 APK assets；D0 shell 仅作为 fallback。
 
 前置审计：
 
-- 先阅读并落实 `docs/core-portability-webview-feasibility.md`。
+- 先阅读并落实 `docs/knowledge/integration/core-portability-webview-feasibility.md`。
 - 阶段 D 的第一步不是抽 `apps/editor/src/core`，而是验证 WebView 最小宿主、消息协议和生命周期。
 - 接真实 KMD runtime 前，需要先处理 Vue/Pinia store、静态资源路径、runtime singleton 和 command registry 的边界。
 

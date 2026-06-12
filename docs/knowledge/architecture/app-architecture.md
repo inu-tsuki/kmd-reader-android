@@ -2,7 +2,7 @@
 
 > 项目阶段：第二阶段架构设计
 > 文档状态：草案
-> 最近更新：2026-05-13
+> 最近更新：2026-05-26
 
 ## 1. 架构目标
 
@@ -16,7 +16,7 @@
 - 数据可以从 mock 平滑迁移到 Room 或远程 API。
 - KMD Runtime 不在 Android 端重复实现。
 - 活动桌面式导航可以先用本地状态验证，后续再接 Navigation Compose。
-- 审核、导入、阅读都依附同一套作品模型，而不是各做一份数据。
+- 书架、发现、审核、导入、阅读都依附同一套作品模型，而不是各做一份数据。
 
 ## 2. 分层原则
 
@@ -42,6 +42,10 @@ ui
 
 第二阶段可以先不完整实现所有层，但包结构应提前按这个方向准备。
 
+2026-05-26 运行时状态机补充：阅读页的 WebView transport 就绪不等于作品源码已经加载成功。`KmdReaderViewModel` 必须把 `.kmd` source 获取失败视为终态错误，不能被随后到达的 `TransportReady` 覆盖回“Runtime 已连接 / 正在载入作品”。`ReaderRuntimeBridge.prepareLoad(workId)` 用来声明当前目标作品，并清理旧 `loadScript`；只有纯 WebView rebind 才允许重放仍属于当前作品的 `lastLoadRequest`。
+
+2026-05-26 书架边界补充：书架是正式产品能力，不是 mock fallback 或个人设置页。数据层需要区分 `LocalLibrary`（导入作品、随包示例、本地草稿、阅读进度、收藏、缓存）和 `CommunityDiscovery`（社区 API 元数据与发现流）。两者可以共享 `Work` 模型，但必须暴露作品是否有本地 source、是否可离线阅读、是否需要联网。
+
 ## 3. 推荐包结构
 
 当前包名为 `com.example.kmd_reader`。课程阶段可以先保留，后续发布前再考虑改为正式包名。
@@ -57,10 +61,10 @@ com.example.kmd_reader/
       DeskHost.kt
       AppTopBar.kt
     screen/
-      mine/
-        MineDesk.kt
-      browse/
-        BrowseDesk.kt
+      library/
+        LibraryDesk.kt
+      discovery/
+        DiscoveryDesk.kt
         FilterOverlay.kt
       work/
         WorkDetailDesk.kt
@@ -149,8 +153,8 @@ data class KmdReaderState(
 
 ```kotlin
 sealed interface KmdReaderAction {
-    data object OpenMine : KmdReaderAction
-    data object OpenBrowse : KmdReaderAction
+    data object OpenLibrary : KmdReaderAction
+    data object OpenDiscovery : KmdReaderAction
     data class OpenWork(val workId: String) : KmdReaderAction
     data object OpenReader : KmdReaderAction
     data object OpenImport : KmdReaderAction
@@ -170,15 +174,15 @@ sealed interface KmdReaderAction {
 
 ```kotlin
 enum class Desk {
-    Mine,
-    Browse,
+    Library,
+    Discovery,
     Detail,
     Reader,
     Import
 }
 
 data class DeskStackState(
-    val base: List<Desk> = listOf(Desk.Mine, Desk.Browse),
+    val base: List<Desk> = listOf(Desk.Library, Desk.Discovery),
     val extension: List<Desk> = emptyList(),
     val activeIndex: Int = 1,
     val currentWorkId: String? = null,
@@ -190,13 +194,15 @@ data class DeskStackState(
 }
 ```
 
+`activeIndex` 的默认值可以根据产品验证调整：偏常规阅读器时默认打开 `Library`，偏社区发现时默认打开 `Discovery`。无论默认页如何，`Library` 在条带中始终位于 `Discovery` 左侧。
+
 ### 5.2 桌面策略
 
 桌面变化放在 `DeskStackPolicy`，不要散落在页面按钮里。
 
 核心规则：
 
-- `Mine` 和 `Browse` 永远保留。
+- `Library` 和 `Discovery` 永远保留。
 - 打开作品时，替换所有右侧临时桌面，然后追加 `Detail`。
 - 打开阅读时，如果已有 `Reader` 则切换过去，否则追加 `Reader`。
 - 打开导入时，替换导入流程相关桌面。
@@ -212,7 +218,7 @@ data class DeskStackState(
 
 - 第一版允许顶部标签点击切换。
 - 第二版再加入左右滑动。
-- 页面条带最多保留 `Mine + Browse + Detail + Reader`。
+- 页面条带最多保留 `Library + Discovery + Detail + Reader`。
 - 搜索和审阅先做 overlay，不进入桌面列表。
 
 ## 6. 领域模型
@@ -234,9 +240,34 @@ data class Work(
     val presentation: WorkPresentation,
     val contentUri: String,
     val previewUri: String?,
+    val script: KmdScriptRef,
+    val assetManifest: WorkAssetManifest?,
     val estimatedDurationSec: Int
 )
 ```
+
+`Work` 是社区作品实体，不直接内联 `.kmd` 文本。真实脚本文档通过 active revision 绑定：
+
+```kotlin
+data class KmdScriptRef(
+    val activeRevisionId: String,
+    val activeRevision: KmdScriptRevision,
+    val revisions: List<KmdScriptRevision>
+)
+
+data class KmdScriptRevision(
+    val id: String,
+    val label: String,
+    val sourceUrl: String,
+    val mimeType: String,
+    val kmdVersion: String,
+    val runtimeVersion: String,
+    val createdAt: String,
+    val contentHash: String?
+)
+```
+
+Android 列表和详情先加载 `Work` metadata；进入阅读时再通过 `WorkRepository.getWorkSource(workId)` 获取 `text/x-kmd` source，并把 `work + source + assetManifest` 交给 runtime。
 
 ### 6.2 WorkPresentation
 
@@ -288,6 +319,7 @@ interface WorkRepository {
     suspend fun listWorks(): List<Work>
     suspend fun getWork(id: String): Work?
     suspend fun listIssues(workId: String): List<ScriptIssue>
+    suspend fun getWorkSource(workId: String): String?
 }
 ```
 
@@ -321,7 +353,7 @@ Android 端不实现 KMD parser、layout 或 renderer。Reader Runtime 是外部
 ViewModel 与 Runtime Bridge 的详细演进规划见：
 
 ```text
-docs/viewmodel-runtime-plan.md
+docs/planning/runtime/viewmodel-runtime-plan.md
 ```
 
 ### 8.1 Bridge 边界
@@ -370,7 +402,7 @@ sealed interface ReaderRuntimeEvent {
 - `data/MockWorkRepository`。
 - `presentation/DeskStackState` 和 `DeskStackPolicy`。
 - `ui/app/KmdReaderApp`。
-- `MineDesk`、`BrowseDesk`、`WorkDetailDesk`、`ReaderDesk`。
+- `LibraryDesk`、`DiscoveryDesk`、`WorkDetailDesk`、`ReaderDesk`。
 - 搜索浮层和审阅浮层可以先放在页面内，但 action 和状态要走统一入口。
 
 暂缓：

@@ -35,8 +35,8 @@ Android Compose
 
 - `apps/editor/src/core/`
 - `apps/editor/src/store/editorStore.ts`
-- `docs/repository-strategy.md`
-- `apps/android-reader/docs/viewmodel-runtime-plan.md`
+- `docs/planning/ecosystem/repository-strategy.md`
+- `apps/android-reader/docs/planning/runtime/viewmodel-runtime-plan.md`
 
 重点检查：
 
