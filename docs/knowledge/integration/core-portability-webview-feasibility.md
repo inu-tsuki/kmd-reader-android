@@ -299,10 +299,11 @@ Android 侧只加载这份构建产物，不保存 parser/layout/renderer 源码
 
 ### D3：真实 runtime 打包进 Android
 
-当 D2 的 bundle 能独立运行后，再复制构建产物到 Android：
+当 D2 的 bundle 能独立运行后，Android 构建应消费主仓库 reader runtime 产物：
 
 ```text
-app/src/main/assets/kmd-runtime/
+dist/reader-runtime/
+  -> generated assets/reader-runtime/
 ```
 
 Android 只与静态产物和消息协议耦合。

@@ -183,7 +183,7 @@ Android
 短期：
 
 ```text
-WebView 加载本地 assets/kmd-runtime/index.html
+WebView 加载本地 assets/kmd-runtime/index.html（D0 fallback shell）
 ```
 
 调试期可选：
@@ -197,7 +197,8 @@ WebView 加载开发服务器 URL
 ```text
 packages/reader-runtime-web
   -> 构建静态资源
-  -> Android 打包到 app/src/main/assets/kmd-runtime/
+  -> Android 同步到 generated assets/reader-runtime/
+  -> WebView 通过 https://kmd-reader-runtime.local/reader-runtime/index.html 加载
 ```
 
 不要直接把 `apps/editor/src/core` 散拷进 Android。应先在 KMD 主仓库中形成稳定的 reader runtime web 构建产物。
@@ -453,7 +454,7 @@ ReaderDesk
 - `runtime/webview/RuntimeMessageCodec.kt`
 - `runtime/webview/RuntimeJavascriptBridge.kt`
 - `ui/screen/reader/ReaderRuntimeHost.kt`
-- 本地 `assets/kmd-runtime/index.html`
+- 本地 `assets/kmd-runtime/index.html` D0 fallback shell
 - 阅读页已能加载 WebView D0 shell，并通过 `ReaderRuntimeBridge` 接收 `ready`、`progressChanged`、`inspectionReported`、`error`。
 - 若主仓库存在 `dist/reader-runtime/`，Android Gradle 会在 `preBuild` 阶段同步到 APK `assets/reader-runtime/`，并优先加载真实 `reader-runtime-web` bundle。
 - 真实 bundle 通过本地 HTTPS 虚拟域名 `https://kmd-reader-runtime.local/reader-runtime/index.html` 加载，WebView request 拦截器映射到 APK assets；D0 shell 仅作为 fallback。
@@ -483,7 +484,7 @@ ReaderDesk
 1. 在 KMD 主仓库规划 `packages/reader-runtime-web`。
 2. 明确它消费 `apps/editor/src/core` 或未来 `packages/core` 的方式。
 3. 输出静态 `index.html + assets`。
-4. Android 构建时复制到 `app/src/main/assets/kmd-runtime/`。
+4. Android 构建时同步到 generated assets 的 `reader-runtime/` 目录。
 5. 建立 runtime message protocol 的版本号。
 
 验收：
@@ -508,7 +509,8 @@ ReaderDesk
 ```text
 ReaderRuntimeHost
   -> WebViewReaderRuntimeBridge
-  -> local assets/kmd-runtime/index.html
+  -> local assets/kmd-runtime/index.html fallback
+  -> dist/reader-runtime generated asset when present
   -> ready/progressChanged/error message loop
 ```
 

@@ -1,6 +1,6 @@
 # Android Reader Planning
 
-> 最近更新：2026-05-27
+> 最近更新：2026-06-15
 
 这里保存仍会影响 Android Reader 后续开发顺序的计划文档。
 
@@ -25,7 +25,7 @@
 ## 当前优先级
 
 1. 收束 runtime 错误恢复：renderer 退出、source missing、runtime failed 都要可解释、可重试、可返回。
-2. 实施 `ReaderCompanionContainer`：先建状态和空容器，再迁移现有审阅 UI。
+2. 手测 `ReaderCompanionContainer`：Review / Issues 切换时 WebView 不重建、companion 高度不跳、源码行气泡关闭手感可靠。
 3. 补横屏舞台的“横屏观看”入口，避免把竖屏 letterbox 当作最终体验。
-4. 推进书架/本地导入/阅读进度，让 Android Reader 更像常规阅读器。
+4. 推进阅读进度持久化，再进入书架/本地导入/离线缓存。
 5. 跟踪主仓库 `Work.presentation` 生成草案，但不把生成器作为 Android Reader 近期任务。
