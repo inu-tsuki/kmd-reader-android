@@ -479,9 +479,11 @@ ReaderDesk
 
 ### 阶段 E：Reader Runtime Web 产物化
 
+实现状态：已完成。主仓库 `@kmd/reader-runtime-web` 已建立为 workspace package，Android 通过 Gradle 同步消费 `dist/reader-runtime/` 产物（产物路径与拦截关系见主仓库 `docs/knowledge/integration/reader-runtime-web-bundle.md`）。
+
 目标：从 Editor runtime 提取可打包 reader runtime，而不是复制核心。
 
-1. 在 KMD 主仓库规划 `packages/reader-runtime-web`。
+1. 在 KMD 主仓库规划 `packages/reader-runtime-web`（已完成）。
 2. 明确它消费 `apps/editor/src/core` 或未来 `packages/core` 的方式。
 3. 输出静态 `index.html + assets`。
 4. Android 构建时同步到 generated assets 的 `reader-runtime/` 目录。
@@ -502,16 +504,6 @@ ReaderDesk
 - 不把审阅做成独立一级导航。
 - 不在 UI Composable 中直接调用 Retrofit 或 DAO。
 
-## 10. 下一步建议
+## 10. 路线指针
 
-下一次实现优先做阶段 D0：
-
-```text
-ReaderRuntimeHost
-  -> WebViewReaderRuntimeBridge
-  -> local assets/kmd-runtime/index.html fallback
-  -> dist/reader-runtime generated asset when present
-  -> ready/progressChanged/error message loop
-```
-
-这会先验证 Android WebView 宿主是否稳定，再决定何时接入真实 KMD reader runtime web 产物。
+阶段 D0（WebView 宿主 + `dist/reader-runtime` 产物消费）已完成，见 §阶段 D 实现状态。后续优先级以 [`roadmap.md`](../roadmap.md) 为准，本计划不复写当前任务清单。

@@ -303,7 +303,7 @@ flowchart LR
 
 - 使用全屏 `ReaderRuntimeHost` 或 D0 shell。
 - 控制条常显，后续再实现自动隐藏。
-- 审阅入口可以先打开现有 `ReviewOverlay`。
+- 审阅入口在阅读态打开 `ReaderCompanionContainer`（Review/Issues companion）；非阅读态仍可用 App 级 `ReviewOverlay`。
 - 根据作品形态传入 `presentationMode` 和移动端 viewport，避免把 runtime 压进小窗口。
 
 ### 7.6 审核/代码审阅面板

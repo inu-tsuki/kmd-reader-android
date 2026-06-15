@@ -4,7 +4,9 @@
 
 这里保存仍会影响 Android Reader 后续开发顺序的计划文档。
 
-## 当前入口
+## 入口文档
+
+> Android Reader 当前路线与优先级以 [`roadmap.md`](roadmap.md) 为准。
 
 - [Roadmap](roadmap.md)
 - [Runtime 实现方案](runtime/runtime-implementation-plan.md)
@@ -21,11 +23,3 @@
 - [第二阶段计划](stages/stage-2-plan.md)
 - [第三阶段数据与网络规划](stages/stage-3-data-network-plan.md)
 - [第五阶段集成测试报告](stages/stage-5-integration-test-report.md)
-
-## 当前优先级
-
-1. 收束 runtime 错误恢复：renderer 退出、source missing、runtime failed 都要可解释、可重试、可返回。
-2. 手测 `ReaderCompanionContainer`：Review / Issues 切换时 WebView 不重建、companion 高度不跳、源码行气泡关闭手感可靠。
-3. 补横屏舞台的“横屏观看”入口，避免把竖屏 letterbox 当作最终体验。
-4. 推进阅读进度持久化，再进入书架/本地导入/离线缓存。
-5. 跟踪主仓库 `Work.presentation` 生成草案，但不把生成器作为 Android Reader 近期任务。

@@ -2,7 +2,9 @@
 
 > 项目阶段：阶段 D 前置审计  
 > 文档状态：草案  
-> 最近更新：2026-05-14
+> 最近更新：2026-06-16
+
+> 命名约定：本审计定义的 **D0–D3** 是 WebView 宿主子阶段（见 §7）；**阶段 A–E** 是 ViewModel/runtime 推进阶段（见 `planning/runtime/viewmodel-runtime-plan.md`，其中阶段 D 承载 D0–D3）；**Phase R** 是主仓库 reader-runtime-web 抽离阶段。三者都用字母 D，但分属不同坐标轴。
 
 ## 1. 结论
 
