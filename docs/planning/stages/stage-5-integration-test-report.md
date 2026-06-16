@@ -60,13 +60,13 @@
 | IT-03 | 详情进入阅读页 | 1. 进入作品详情；2. 点击阅读按钮 | 进入阅读页；WebView runtime 正常加载；无黑屏占位 | logcat 确认 `KmdReaderWebView: Loading runtime url=https://kmd-reader-runtime.local/reader-runtime/index.html`（真实 bundle，非 D0 fallback）；WebView 初始化成功，进入 ready 态 | 通过 | `.smoke/03-reader-initial.png`、`.smoke/04-reader-ready-black.png` |
 | IT-04 | KMD 脚本播放 | 1. 阅读页等待加载；2. 开始播放；3. 观察 20 秒 | 文字或画面正常显示；进度变化；播放期间不崩溃 | 点击播放后 mock 作品正常播放并自然结束；底栏显示 `0:05 / 0:05 100%` 与 `ended`，证明 `progressChanged` 正常回传、ready→play→progress→ended 链路闭合 | 通过 | `.smoke/04-reader-ready-black.png`（ended 态） |
 | IT-05 | 阅读页返回与重复进入 | 1. 播放中返回详情；2. 再次点击阅读；3. 重复 3 次 | 不出现闪退；不出现持续黑屏；WebView 可重新加载 | 待手动执行 | 待填写 |  |
-| IT-06 | 脚本检查/审阅信息 | 1. 进入详情；2. 查看脚本检查或审阅入口；3. 返回详情 | 能展示脚本检查信息或空状态；返回后页面状态正常 | 待手动执行 | 待填写 |  |
+| IT-06 | 脚本检查/审阅信息 | 1. 进入详情；2. 查看脚本检查或审阅入口；3. 返回详情 | 能展示脚本检查信息或空状态；返回后页面状态正常 | 阅读页点击顶部「检查」打开 Review companion：显示源码全文（L1-L11，含 frontmatter）、行号、底部 command tray（`正播放 L11 \| ⇄`），每行可点击进入行级气泡；logcat 确认 WebView 未重建（仅最初一条 `Loading runtime url`）。UI-4B「打开审阅不重建 WebView」验收点通过 | 通过 | `.smoke/06-companion-open.png` |
 | IT-07 | 后端不可用时的兜底 | 1. 关闭 `kmd-community-api`；2. 冷启动 App；3. 进入列表/详情 | App 不闪退；展示缓存、mock 数据或错误提示 | 本轮全程未启动后端，`/works`、`/works/rain-city/issues`、`/works/rain-city/source` 均 `SocketTimeoutException`；App 用 mock works 正常完成列表→详情→阅读→播放全流程，无崩溃 | 通过 | logcat `okhttp` 超时记录 + 全流程截图 |
 | IT-08 | 屏幕旋转稳定性 | 1. 在列表、详情、阅读页分别旋转屏幕；2. 每页旋转 3 次 | 不闪退；页面可继续操作；阅读页能恢复或给出明确错误 | 待手动执行 | 待填写 |  |
 
 ## 5. Bug 清单与修复记录
 
-修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 10 个问题，其中 8 个已修复或已缓解，修复率为 80%。BUG-09 为 2026-06-17 smoke 新发现，待排期。
+修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 13 个问题，其中 8 个已修复或已缓解，修复率为 62%。BUG-09/11/12/13 为 2026-06-17 smoke 与综合评测新发现，待排期；其中 BUG-11/12 同源（timelineMarkers 缺失）。
 
 | Bug 编号 | 问题描述 | 严重度 | 状态 | 修复或说明 |
 |----------|----------|--------|------|------------|
@@ -80,6 +80,9 @@
 | BUG-08 | 播放中拖动进度条会连续向 WebView 发送 seek，在 Profiler 实时追踪下放大 renderer 压力 | 中 | 已修复 | Slider 拖动时只更新本地进度，松手后提交一次 seek；常规播放/seek 诊断日志默认关闭 |
 | BUG-09 | 进入阅读页 runtime `ready` 后，未播放时 WebView 显示黑屏；播放结束后（`ended`）也无首帧/重置/提示 | 高 | 待排期 | 2026-06-17 smoke 发现：链路本身闭合（ready→play→progress→ended），但 ready 首帧未渲染、ended 无恢复入口，用户只看到黑屏。属 runtime/UI 首帧与结束态体验缺口，对应 `runtime-ui-implementation-plan.md` UI-5 与 `runtime-implementation-plan.md` §4 |
 | BUG-10 | 阅读页顶部 viewport 状态文案出现「横屏舞台 · 竖屏 · 9:16」矛盾措辞 | 低 | 已修复 | 2026-06-17 smoke 发现：`PresentationMode.Stage` 的 label 硬编码为「横屏舞台」，但 stage 可为竖屏（`rain-city` 即竖屏 stage）。根因在 `Work.kt` enum label，方向应由 `OrientationHint` 表达。已改为 `Stage("舞台")`，`ReaderDesk` viewport 描述变为「舞台 · 竖屏 · 9:16 · 1080x1920 · 填满阅读区」。`./gradlew :app:testDebugUnitTest` 通过 |
+| BUG-11 | Review 行级气泡「跳转」对简单脚本始终报「选中行之后没有可播放的脚本段」 | 高 | 待排期 | 2026-06-17 评测发现。根因链：`KmdReaderViewModel.resolveSourceLineSeekProgress` 依赖 `readySession.timelineMarkers`；`ScriptPlayer` 的 ready 事件带 `timelineMarkers`；但 `SegmentBuilder` 只在 `token.startTime !== undefined` 时生成 marker（`SegmentBuilder.ts:247`）。rain-city 这类无显式时序的简单脚本，parser 未给 token 赋 `startTime`，导致 markers 为空 → 跳转/播放位全部失效。注意 `progressChanged.line` 仍可用（`正播放 L11` 正常），说明问题集中在 ready 的 markers 而非播放事件。需在 web runtime 侧决定：为无显式时序脚本合成默认 marker，或改由 progressChanged.line 驱动跳转 |
+| BUG-12 | Issues companion「播放位」按钮点击无效 | 中 | 待排期 | 2026-06-17 评测发现。同 BUG-11 同源：`jumpIssueToPlayback` 走 `resolveIssueSeekProgress`，最终也依赖 `timelineMarkers` 或 `playbackAnchor`，简单脚本下两者皆空，progress 解析为 null。文案「播放位」表意不清，建议改为「跳到播放位置」或「回到播放处」 |
+| BUG-13 | Issue companion 的「新问题草稿」页面未铺满，draft 区与 issue 列表在狭小区域并存滚动 | 中 | 待排期 | 2026-06-17 评测发现。从 Review 行气泡「提 issue」进入 Issues draft 后，draft 表单未成为 companion 主内容，issue 台账仍占空间，两者嵌套滚动。违反 `runtime-ui-implementation-plan.md` UI-4G「issue detail 不能再嵌入源码查看器」的精神（draft 同理应占主区）。需在 `IssuesCompanionPanel` 中让 draft 态获得完整高度 |
 
 ## 6. 性能检查记录
 
@@ -138,4 +141,11 @@
 
 ## 8. 结论
 
-当前 KMD Reader Android 已具备第五阶段验收所需的核心结构：主界面、详情页、Repository 数据源、ViewModel 状态绑定、真实 WebView runtime 宿主和基础单元测试。第五阶段剩余工作主要是执行手动集成测试、补充实际结果、截取 Profiler 证据，并确认阅读页重复进入和屏幕旋转不会引入新的闪退。
+2026-06-17 完成一轮模拟器端到端 smoke 与 Reader UI 综合评测。核心结论：
+
+- **runtime 链路闭合**：真实 `reader-runtime-web` bundle 加载、`runtimeReady → loadScript → ready → play → progress → ended` 全链路验证通过（IT-01/02/03/04/07）。
+- **Review/Issues companion 骨架可用**：打开审阅不重建 WebView（UI-4B 验收点通过）、源码全文/行号/command tray/行级气泡/Review↔Issues 切换/「查看脚本」高亮均正常。
+- **chrome overlay 可用**：双指轻点可切换 chrome 与 companion 显隐。
+- **主要缺口**：ready 首帧/ended 黑屏（BUG-09）、简单脚本跳转失效（BUG-11/12，根因为 timelineMarkers 缺失）、issue draft 布局（BUG-13）、横屏观看入口与进度保留（UI-3 未实现）。
+
+当前 KMD Reader Android 已具备第五阶段验收所需的核心结构：主界面、详情页、Repository 数据源、ViewModel 状态绑定、真实 WebView runtime 宿主和基础单元测试，且 runtime 主链路经真机/模拟器验证闭合。剩余工作集中在 ready 首帧、timelineMarkers 缺失场景、companion draft 布局与横屏体验，以及补充 Profiler 证据与重复进入/旋转的完整记录。
