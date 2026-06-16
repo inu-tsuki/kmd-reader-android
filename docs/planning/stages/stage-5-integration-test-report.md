@@ -66,7 +66,7 @@
 
 ## 5. Bug 清单与修复记录
 
-修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 13 个问题，其中 8 个已修复或已缓解，修复率为 62%。BUG-09/11/12/13 为 2026-06-17 smoke 与综合评测新发现，待排期；其中 BUG-11/12 同源（timelineMarkers 缺失）。
+修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 13 个问题，其中 10 个已修复或已缓解，修复率为 77%。BUG-09（ready/ended 黑屏）、BUG-13（issue draft 布局）待排期。BUG-11/12 于 2026-06-17 当日修复（段落级 timelineMarkers）。
 
 | Bug 编号 | 问题描述 | 严重度 | 状态 | 修复或说明 |
 |----------|----------|--------|------|------------|
@@ -80,8 +80,8 @@
 | BUG-08 | 播放中拖动进度条会连续向 WebView 发送 seek，在 Profiler 实时追踪下放大 renderer 压力 | 中 | 已修复 | Slider 拖动时只更新本地进度，松手后提交一次 seek；常规播放/seek 诊断日志默认关闭 |
 | BUG-09 | 进入阅读页 runtime `ready` 后，未播放时 WebView 显示黑屏；播放结束后（`ended`）也无首帧/重置/提示 | 高 | 待排期 | 2026-06-17 smoke 发现：链路本身闭合（ready→play→progress→ended），但 ready 首帧未渲染、ended 无恢复入口，用户只看到黑屏。属 runtime/UI 首帧与结束态体验缺口，对应 `runtime-ui-implementation-plan.md` UI-5 与 `runtime-implementation-plan.md` §4 |
 | BUG-10 | 阅读页顶部 viewport 状态文案出现「横屏舞台 · 竖屏 · 9:16」矛盾措辞 | 低 | 已修复 | 2026-06-17 smoke 发现：`PresentationMode.Stage` 的 label 硬编码为「横屏舞台」，但 stage 可为竖屏（`rain-city` 即竖屏 stage）。根因在 `Work.kt` enum label，方向应由 `OrientationHint` 表达。已改为 `Stage("舞台")`，`ReaderDesk` viewport 描述变为「舞台 · 竖屏 · 9:16 · 1080x1920 · 填满阅读区」。`./gradlew :app:testDebugUnitTest` 通过 |
-| BUG-11 | Review 行级气泡「跳转」对简单脚本始终报「选中行之后没有可播放的脚本段」 | 高 | 待排期 | 2026-06-17 评测发现。根因链：`KmdReaderViewModel.resolveSourceLineSeekProgress` 依赖 `readySession.timelineMarkers`；`ScriptPlayer` 的 ready 事件带 `timelineMarkers`；但 `SegmentBuilder` 只在 `token.startTime !== undefined` 时生成 marker（`SegmentBuilder.ts:247`）。rain-city 这类无显式时序的简单脚本，parser 未给 token 赋 `startTime`，导致 markers 为空 → 跳转/播放位全部失效。注意 `progressChanged.line` 仍可用（`正播放 L11` 正常），说明问题集中在 ready 的 markers 而非播放事件。需在 web runtime 侧决定：为无显式时序脚本合成默认 marker，或改由 progressChanged.line 驱动跳转 |
-| BUG-12 | Issues companion「播放位」按钮点击无效 | 中 | 待排期 | 2026-06-17 评测发现。同 BUG-11 同源：`jumpIssueToPlayback` 走 `resolveIssueSeekProgress`，最终也依赖 `timelineMarkers` 或 `playbackAnchor`，简单脚本下两者皆空，progress 解析为 null。文案「播放位」表意不清，建议改为「跳到播放位置」或「回到播放处」 |
+| BUG-11 | Review 行级气泡「跳转」对简单脚本始终报「选中行之后没有可播放的脚本段」 | 高 | 已修复 | 2026-06-17 评测发现，当日修复。根因：`SegmentBuilder.ts:247` 的 marker 生成条件 `token.startTime !== undefined` 是 dead 条件——`token.startTime`（parser 声明但 `TextPlayer.buildTimeline` 从不回写）几乎永假，markers 恒为空。改为段落级 marker：每个段落用可靠的 `segmentCursor` 时间生成一个锚点（`id/line/timeMs/duration`），不再依赖 token.startTime。模拟器回归确认：中间行跳转生效、Issues 播放位可用。已知限制：段落级粒度——当 parser 把多行正文合并为单段落时（如 rain-city 三行正文→1 段落），段内非首行跳转仍报「之后无可播放段」（唯一 marker 在段落首行之前）。token 级精确 marker 留待 Phase B parser 重构 |
+| BUG-12 | Issues companion「播放位」按钮点击无效 | 中 | 已修复 | 2026-06-17 评测发现，当日修复。同 BUG-11 同源，随段落级 marker 修复一并解决。模拟器回归确认可用。文案「播放位」表意不清，建议后续改为「跳到播放位置」 |
 | BUG-13 | Issue companion 的「新问题草稿」页面未铺满，draft 区与 issue 列表在狭小区域并存滚动 | 中 | 待排期 | 2026-06-17 评测发现。从 Review 行气泡「提 issue」进入 Issues draft 后，draft 表单未成为 companion 主内容，issue 台账仍占空间，两者嵌套滚动。违反 `runtime-ui-implementation-plan.md` UI-4G「issue detail 不能再嵌入源码查看器」的精神（draft 同理应占主区）。需在 `IssuesCompanionPanel` 中让 draft 态获得完整高度 |
 
 ## 6. 性能检查记录
@@ -146,6 +146,8 @@
 - **runtime 链路闭合**：真实 `reader-runtime-web` bundle 加载、`runtimeReady → loadScript → ready → play → progress → ended` 全链路验证通过（IT-01/02/03/04/07）。
 - **Review/Issues companion 骨架可用**：打开审阅不重建 WebView（UI-4B 验收点通过）、源码全文/行号/command tray/行级气泡/Review↔Issues 切换/「查看脚本」高亮均正常。
 - **chrome overlay 可用**：双指轻点可切换 chrome 与 companion 显隐。
-- **主要缺口**：ready 首帧/ended 黑屏（BUG-09）、简单脚本跳转失效（BUG-11/12，根因为 timelineMarkers 缺失）、issue draft 布局（BUG-13）、横屏观看入口与进度保留（UI-3 未实现）。
+- **companion 跳转已修复**：2026-06-17 修复段落级 timelineMarkers 后，Review 行气泡「跳转」对中间行生效、Issues 播放位可用（BUG-11/12）。已知限制：段落级粒度，段内非首行跳转仍受限，token 级留待 Phase B。
+- **正播放跟随交互**：Review 源码查看器默认跟随播放行滚动；用户主动滑动后停止跟随、按钮变暗；点「正播放 Lxx」恢复跟随。状态为 Composable 局部，不进 ViewModel。
+- **主要缺口**：ready 首帧/ended 黑屏（BUG-09）、issue draft 布局（BUG-13）、横屏观看入口与进度保留（UI-3 未实现）。
 
-当前 KMD Reader Android 已具备第五阶段验收所需的核心结构：主界面、详情页、Repository 数据源、ViewModel 状态绑定、真实 WebView runtime 宿主和基础单元测试，且 runtime 主链路经真机/模拟器验证闭合。剩余工作集中在 ready 首帧、timelineMarkers 缺失场景、companion draft 布局与横屏体验，以及补充 Profiler 证据与重复进入/旋转的完整记录。
+当前 KMD Reader Android 已具备第五阶段验收所需的核心结构：主界面、详情页、Repository 数据源、ViewModel 状态绑定、真实 WebView runtime 宿主和基础单元测试，且 runtime 主链路经真机/模拟器验证闭合。剩余工作集中在 ready 首帧、companion draft 布局与横屏体验，以及补充 Profiler 证据与重复进入/旋转的完整记录。

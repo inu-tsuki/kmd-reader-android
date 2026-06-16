@@ -192,11 +192,12 @@ R2 分成六个切片：
 建议下一轮按这个顺序做：
 
 1. **R1-2 ready/ended 首帧与结束态**（BUG-09）：runtime `ready` 后渲染首帧（不再黑屏），`ended` 后提供重播/返回入口。这是 2026-06-17 smoke 暴露的最影响观感缺口，链路已闭合，只差首帧和结束态。
-2. **R1-3 timelineMarkers 缺失场景**（BUG-11/12）：简单脚本（无显式时序指令）下 `SegmentBuilder` 不生成 marker，导致 companion「跳转」「播放位」全部失效。需在 web runtime 侧决定：为无显式时序脚本合成默认 marker，或让 Android 跳转改由 `progressChanged.line` 驱动。根因见 `ScriptBuilder.ts:247` 的 `token.startTime !== undefined` 条件。
-3. **R2-4I issue draft 布局**（BUG-13）：从 Review 行气泡「提 issue」进入 Issues 后，draft 表单应占主区，不与 issue 台账嵌套滚动。
-4. **R1-1 错误恢复收束**：让 renderer 退出、source missing、runtime failed 都有统一恢复 UI。
-5. **R2-3 横屏观看按钮与进度保留**：先按钮和提示，再考虑 Activity orientation lock；横屏切换需保留进度（当前未实现）。
-6. **R2-4H/G/E 手测**：companion 尺寸、Review↔Issues handoff、bottom sheet / side panel。
+2. **R2-4I issue draft 布局**（BUG-13）：从 Review 行气泡「提 issue」进入 Issues 后，draft 表单应占主区，不与 issue 台账嵌套滚动。
+3. **R1-1 错误恢复收束**：让 renderer 退出、source missing、runtime failed 都有统一恢复 UI。
+4. **R2-3 横屏观看按钮与进度保留**：先按钮和提示，再考虑 Activity orientation lock；横屏切换需保留进度（当前未实现）。
+5. **R2-4H/G/E 手测**：companion 尺寸、Review↔Issues handoff、bottom sheet / side panel。
+
+注：BUG-11/12（timelineMarkers 缺失）已于 2026-06-17 修复，改为段落级 marker；token 级精确 marker 留待 Phase B parser 重构。正播放跟随交互已实现（Composable 局部状态）。
 
 每一步都要保持：
 

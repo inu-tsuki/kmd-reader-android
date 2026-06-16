@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -27,6 +28,7 @@ import com.example.kmd_reader.domain.model.KmdSourceLine
 import com.example.kmd_reader.domain.model.KmdSourceRange
 import com.example.kmd_reader.domain.model.KmdSourceSnapshot
 import com.example.kmd_reader.domain.model.KmdSourceSnippet
+import kotlinx.coroutines.flow.filter
 
 enum class KmdSourceContextMode {
     Snippet,
@@ -49,6 +51,7 @@ fun KmdSourceContextView(
     showSurfaceChrome: Boolean = true,
     onLineClick: (Int) -> Unit = {},
     onBadgeClick: (String) -> Unit = {},
+    onUserScroll: (() -> Unit)? = null,
     lineContext: @Composable (Int) -> Unit = {}
 ) {
     val lines = remember(snapshot, snippet, mode) {
@@ -66,6 +69,17 @@ fun KmdSourceContextView(
         val index = lines.indexOfFirst { it.number == focusLine }
         if (index >= 0) {
             listState.scrollToItem(index)
+        }
+    }
+
+    // 用户主动拖动时通知上层（用于停止「正播放跟随」）。
+    // 编程式 scrollToItem 是瞬时无动画的，不会触发 isScrollInProgress，
+    // 因此不会误判为用户滑动。
+    if (onUserScroll != null) {
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.isScrollInProgress }
+                .filter { it }
+                .collect { onUserScroll.invoke() }
         }
     }
 

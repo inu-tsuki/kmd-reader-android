@@ -155,9 +155,13 @@ private fun BoxScope.ReviewCompanionPanel(
             }
         )
     }
-    val sourceFocusLine = when (focusMode) {
-        ReviewFocusMode.Playback -> currentPlaybackLine
-        ReviewFocusMode.FullSource -> selectedSourceLine ?: selectedIssueLine ?: currentPlaybackLine
+    // 正播放跟随：默认开启，用户主动滑动或聚焦 issue/源码行时停止，点「正播放」恢复。
+    var followPlayback by remember(work.id) { mutableStateOf(true) }
+    val sourceFocusLine = when {
+        focusMode == ReviewFocusMode.FullSource ->
+            selectedSourceLine ?: selectedIssueLine ?: currentPlaybackLine
+        followPlayback -> currentPlaybackLine
+        else -> null
     }
     val sourceEmptyText = when {
         sourceSnapshot == null -> "源码快照载入中。"
@@ -242,15 +246,18 @@ private fun BoxScope.ReviewCompanionPanel(
                         )
                     }
                 },
-                emptyText = sourceEmptyText
+                emptyText = sourceEmptyText,
+                onUserScroll = { followPlayback = false }
             )
 
             ReviewCommandTray(
                 currentPlaybackLine = currentPlaybackLine,
+                followPlayback = followPlayback,
                 onScrollToPlaybackLine = {
                     if (currentPlaybackLine != null) {
                         activeContextLine = null
                         focusMode = ReviewFocusMode.Playback
+                        followPlayback = true
                         scrollRequestKey += 1
                     }
                 },
@@ -268,6 +275,7 @@ private enum class ReviewFocusMode {
 @Composable
 private fun ReviewCommandTray(
     currentPlaybackLine: Int?,
+    followPlayback: Boolean,
     onScrollToPlaybackLine: () -> Unit,
     onOpenIssues: () -> Unit
 ) {
@@ -284,9 +292,10 @@ private fun ReviewCommandTray(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 高亮仅在「跟随中」时亮起；用户滑动/聚焦 issue 后变暗，提示点击可恢复跟随。
             KmdPill(
                 text = currentPlaybackLine?.let { "正播放 L$it" } ?: "未播放",
-                selected = currentPlaybackLine != null,
+                selected = currentPlaybackLine != null && followPlayback,
                 onClick = currentPlaybackLine?.let { { onScrollToPlaybackLine() } }
             )
             Box(modifier = Modifier.weight(1f))
