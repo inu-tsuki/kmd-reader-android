@@ -85,7 +85,7 @@ enum class WorkLifecycleStatus(val label: String) {
 enum class PresentationMode(val label: String) {
     Scroll("滚动阅读"),
     Paged("分页阅读"),
-    Stage("横屏舞台"),
+    Stage("舞台"),
     Interactive("互动舞台")
 }
 
