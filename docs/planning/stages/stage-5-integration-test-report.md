@@ -66,7 +66,7 @@
 
 ## 5. Bug 清单与修复记录
 
-修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 13 个问题，其中 10 个已修复或已缓解，修复率为 77%。BUG-09 经调查降级为产品设计待决项（不计入 bug 修复率）；BUG-13（issue draft 布局）待排期。BUG-11/12 于 2026-06-17 当日修复（段落级 timelineMarkers）。
+修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 13 个问题，其中 11 个已修复或已缓解，修复率为 85%。BUG-09 经调查降级为产品设计待决项（不计入 bug 修复率）。BUG-11/12/13 于 2026-06-17 修复。
 
 | Bug 编号 | 问题描述 | 严重度 | 状态 | 修复或说明 |
 |----------|----------|--------|------|------------|
@@ -82,7 +82,7 @@
 | BUG-10 | 阅读页顶部 viewport 状态文案出现「横屏舞台 · 竖屏 · 9:16」矛盾措辞 | 低 | 已修复 | 2026-06-17 smoke 发现：`PresentationMode.Stage` 的 label 硬编码为「横屏舞台」，但 stage 可为竖屏（`rain-city` 即竖屏 stage）。根因在 `Work.kt` enum label，方向应由 `OrientationHint` 表达。已改为 `Stage("舞台")`，`ReaderDesk` viewport 描述变为「舞台 · 竖屏 · 9:16 · 1080x1920 · 填满阅读区」。`./gradlew :app:testDebugUnitTest` 通过 |
 | BUG-11 | Review 行级气泡「跳转」对简单脚本始终报「选中行之后没有可播放的脚本段」 | 高 | 已修复 | 2026-06-17 评测发现，当日修复。根因：`SegmentBuilder.ts:247` 的 marker 生成条件 `token.startTime !== undefined` 是 dead 条件——`token.startTime`（parser 声明但 `TextPlayer.buildTimeline` 从不回写）几乎永假，markers 恒为空。改为段落级 marker：每个段落用可靠的 `segmentCursor` 时间生成一个锚点（`id/line/timeMs/duration`），不再依赖 token.startTime。模拟器回归确认：中间行跳转生效、Issues 播放位可用。已知限制：段落级粒度——当 parser 把多行正文合并为单段落时（如 rain-city 三行正文→1 段落），段内非首行跳转仍报「之后无可播放段」（唯一 marker 在段落首行之前）。token 级精确 marker 留待 Phase B parser 重构 |
 | BUG-12 | Issues companion「播放位」按钮点击无效 | 中 | 已修复 | 2026-06-17 评测发现，当日修复。同 BUG-11 同源，随段落级 marker 修复一并解决。模拟器回归确认可用。文案「播放位」表意不清，建议后续改为「跳到播放位置」 |
-| BUG-13 | Issue companion 的「新问题草稿」页面未铺满，draft 区与 issue 列表在狭小区域并存滚动 | 中 | 待排期 | 2026-06-17 评测发现。从 Review 行气泡「提 issue」进入 Issues draft 后，draft 表单未成为 companion 主内容，issue 台账仍占空间，两者嵌套滚动。违反 `runtime-ui-implementation-plan.md` UI-4G「issue detail 不能再嵌入源码查看器」的精神（draft 同理应占主区）。需在 `IssuesCompanionPanel` 中让 draft 态获得完整高度 |
+| BUG-13 | Issue companion 的「新问题草稿」页面未铺满，draft 区与 issue 列表在狭小区域并存滚动 | 中 | 已修复 | 2026-06-17 评测发现，当日修复。根因：`IssuesCompanionPanel` 的 Column 顺序堆叠 draft + issue 台账，draft 无 weight，台账 `weight(1f)` 抢占空间。改为 draft 态独占主区：`issueDraft != null` 时 draft editor 占 `weight(1f)` 并 `verticalScroll`，issue 台账隐藏；取消/提交 draft 后自动回台账。符合 UI-4G「draft 占主区，不嵌套滚动」。模拟器手测确认 |
 
 ## 6. 性能检查记录
 

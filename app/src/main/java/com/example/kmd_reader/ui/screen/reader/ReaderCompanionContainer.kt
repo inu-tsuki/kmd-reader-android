@@ -2,6 +2,8 @@ package com.example.kmd_reader.ui.screen.reader
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -445,17 +447,20 @@ private fun BoxScope.IssuesCompanionPanel(
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            issueFocus.issueDraft?.let { draft ->
+            // draft 态独占主区：提 issue 时 draft 表单铺满 companion，
+            // issue 台账隐藏，避免两者嵌套滚动（BUG-13 / UI-4G）。
+            // 取消或提交 draft 后自动回到台账视图。
+            val draft = issueFocus.issueDraft
+            if (draft != null) {
                 IssueDraftEditor(
                     draft = draft,
+                    modifier = Modifier.weight(1f),
                     onMessageChange = onDraftMessageChange,
                     onSuggestionChange = onDraftSuggestionChange,
                     onSubmit = onSubmitIssueDraft,
                     onCancel = onCancelIssueDraft
                 )
-            }
-
-            if (issues.isEmpty()) {
+            } else if (issues.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -624,16 +629,19 @@ private fun IssueDraftEditor(
     onMessageChange: (String) -> Unit,
     onSuggestionChange: (String) -> Unit,
     onSubmit: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f),
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .padding(12.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
