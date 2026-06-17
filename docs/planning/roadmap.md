@@ -130,7 +130,7 @@ R2 分成六个切片：
 | UI-3 Viewport/横屏 | stage 设计画布、scroll/page 自适应、横屏观看入口 | policy 首轮完成，横屏按钮待做 |
 | UI-4 Companion | 通用附加内容容器，承载 Review / Issues / 行级上下文 | 首轮完成，待手测微调 |
 | UI-5 错误恢复 | runtime 失败可解释、可操作 | 进行中 |
-| UI-6 进度持久化 | 节流保存阅读进度 | 未开始 |
+| UI-6 进度持久化 | 节流保存阅读进度 | **移入 R3**（见下方说明） |
 
 近期实现顺序：
 
@@ -138,8 +138,9 @@ R2 分成六个切片：
 2. UI-4G 手测：Review / Issues 切换时 WebView 不重建、companion 高度不跳。
 3. UI-4E 手测：bottom sheet / side panel / shared height。
 4. UI-5：错误恢复体验继续收束。
-5. UI-3：在 chrome 上加入“横屏观看”按钮和横屏提示。
-6. UI-6：阅读进度持久化。
+5. UI-3：在 chrome 上加入“横屏观看”按钮和横屏提示。（已完成，PR #2）
+
+> UI-6（阅读进度持久化）从 R2 移入 R3。进度数据模型（独立表 vs LocalWork 字段 vs DataStore）本质是 R3 本地数据架构的一部分——进度归属于哪个 work、work 存在哪、外键如何约束，都依赖 R3 的 LocalLibrary / LocalWork 设计。在 R2 用独立 Room 表提前实现会导致外键崩溃（mock 作品不进 Room）或数据归属错乱。R3 统一设计本地数据模型后再实现进度持久化。
 
 ### R3：本地阅读器能力
 
@@ -158,6 +159,8 @@ R2 分成六个切片：
 - 本地作品进入书架，并可打开详情和阅读页。
 - 阅读进度持久化，书架显示继续阅读。
 - 支持移除本地作品、清理缓存和空状态。
+
+> **进度持久化的数据模型教训（2026-06-17）**：进度数据模型必须与 LocalWork 统一设计，不能提前独立实现。曾尝试在 R2 用独立 Room 表 `ReadingProgressEntity`（外键约束 `workId → works.id`），但 mock 作品走 `MockWorkRepository` 从不写入 Room，导致外键约束失败、恢复进度时崩溃。根因：进度归属的 work 在哪存储是 R3 的核心问题，提前建表会把数据架构决策钉死在错误的假设上。R3 实现 LocalWork 时一并决定进度是 LocalWork 字段、独立表还是 DataStore。
 
 依赖：
 
