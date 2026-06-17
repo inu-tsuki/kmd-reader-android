@@ -1,5 +1,8 @@
 package com.example.kmd_reader.ui.screen.reader
 
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,16 +31,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.kmd_reader.domain.policy.ReaderCompanionPlacementPolicy
 import com.example.kmd_reader.domain.model.KmdSourceSnapshot
+import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 import com.example.kmd_reader.presentation.IssueFocusState
@@ -52,6 +58,7 @@ import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.ReaderRuntimeCapabilities
 import com.example.kmd_reader.ui.component.InfoCard
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ReaderDesk(
@@ -305,6 +312,14 @@ private fun ReaderTopOverlay(
     onOpenReview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // 仅舞台类作品提供方向入口；阅读类文档保持容器自适应，不需要切方向。
+    val canToggleOrientation = readerViewport.presentationMode.let {
+        it == PresentationMode.Stage || it == PresentationMode.Interactive
+    }
+    val isHostLandscape = readerViewport.isHostLandscape
+
     Surface(
         modifier = modifier,
         color = Color.Black.copy(alpha = 0.58f),
@@ -337,6 +352,27 @@ private fun ReaderTopOverlay(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (canToggleOrientation) {
+                OutlinedButton(onClick = {
+                    // 主流视频 App 模式：点击只「轻推」一次方向，然后释放回跟随系统。
+                    // 设定目标方向让系统执行旋转，短暂延迟后设 UNSPECIFIED，
+                    // 让重力感应重新主导——用户转回竖屏时 App 自然跟随。
+                    val activity = context.findActivity() ?: return@OutlinedButton
+                    val target = if (isHostLandscape) {
+                        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    }
+                    activity.requestedOrientation = target
+                    scope.launch {
+                        delay(1_500)
+                        activity.requestedOrientation =
+                            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    }
+                }) {
+                    Text(if (isHostLandscape) "竖屏" else "横屏观看")
+                }
             }
             OutlinedButton(onClick = onOpenReview) {
                 Text("检查")
@@ -727,4 +763,14 @@ private fun formatMs(value: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "${minutes}:${seconds.toString().padStart(2, '0')}"
+}
+
+// 从 Composable Context 取出 Activity，用于设置 requestedOrientation（横屏切换）。
+private fun Context.findActivity(): Activity? {
+    var ctx = this
+    while (ctx is android.content.ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }
