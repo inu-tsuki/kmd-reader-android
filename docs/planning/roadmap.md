@@ -93,7 +93,7 @@ R4 社区与审阅能力
 
 ### R1：Runtime 稳定化
 
-状态：当前最高优先级之一。
+状态：基本完成（2026-06-17）。onRenderProcessGone release 路径、RetryReaderRuntime、renderer crash 诊断、BUG-14（ended/pause 一致性）均已实现。剩余：load/source missing/transport 竞态的专项回归测试、压力脚本，作为持续维护项。
 
 目标：
 

@@ -66,7 +66,7 @@
 
 ## 5. Bug 清单与修复记录
 
-修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 14 个问题，其中 11 个已修复或已缓解，修复率为 79%。BUG-09 经调查降级为产品设计待决项（不计入 bug 修复率）。BUG-11/12/13 于 2026-06-17 修复。BUG-14（ended 后 seek 状态不一致）待排期。
+修复率计算方式：已修复或已缓解的 Bug 数 / 已发现 Bug 总数。当前记录 14 个问题，其中 12 个已修复或已缓解，修复率为 86%。BUG-09 经调查降级为产品设计待决项（不计入 bug 修复率）。BUG-11/12/13/14 于 2026-06-17 修复。
 
 | Bug 编号 | 问题描述 | 严重度 | 状态 | 修复或说明 |
 |----------|----------|--------|------|------------|
@@ -83,7 +83,7 @@
 | BUG-11 | Review 行级气泡「跳转」对简单脚本始终报「选中行之后没有可播放的脚本段」 | 高 | 已修复 | 2026-06-17 评测发现，当日修复。根因：`SegmentBuilder.ts:247` 的 marker 生成条件 `token.startTime !== undefined` 是 dead 条件——`token.startTime`（parser 声明但 `TextPlayer.buildTimeline` 从不回写）几乎永假，markers 恒为空。改为段落级 marker：每个段落用可靠的 `segmentCursor` 时间生成一个锚点（`id/line/timeMs/duration`），不再依赖 token.startTime。模拟器回归确认：中间行跳转生效、Issues 播放位可用。已知限制：段落级粒度——当 parser 把多行正文合并为单段落时（如 rain-city 三行正文→1 段落），段内非首行跳转仍报「之后无可播放段」（唯一 marker 在段落首行之前）。token 级精确 marker 留待 Phase B parser 重构 |
 | BUG-12 | Issues companion「播放位」按钮点击无效 | 中 | 已修复 | 2026-06-17 评测发现，当日修复。同 BUG-11 同源，随段落级 marker 修复一并解决。模拟器回归确认可用。文案「播放位」表意不清，建议后续改为「跳到播放位置」 |
 | BUG-13 | Issue companion 的「新问题草稿」页面未铺满，draft 区与 issue 列表在狭小区域并存滚动 | 中 | 已修复 | 2026-06-17 评测发现，当日修复。根因：`IssuesCompanionPanel` 的 Column 顺序堆叠 draft + issue 台账，draft 无 weight，台账 `weight(1f)` 抢占空间。改为 draft 态独占主区：`issueDraft != null` 时 draft editor 占 `weight(1f)` 并 `verticalScroll`，issue 台账隐藏；取消/提交 draft 后自动回台账。符合 UI-4G「draft 占主区，不嵌套滚动」。模拟器手测确认 |
-| BUG-14 | 播放 `ended` 后未同时 pause timeline：此时 seek 回中间位置，作品继续播放但状态仍显示 ended | 中 | 待排期 | 2026-06-17 横屏 PR 手测发现（PR-3 边界外）。根因：`SegmentBuilder.ts:299` 的 `segmentTl.eventCallback("onComplete")` 只设 `isAutoPlaying=false` 并回调，**没有 `timeline.pause()`**。GSAP timeline 播毕后仍处非 paused 态，`seekToTime` 只 seek 不 pause，导致 seek 后 timeline 从新位置继续推进，与状态机的 `ended` 不一致。修复方向：onComplete 时补 `timeline.pause()`，使 ended 后 timeline 真正停止；seek 时若处于 ended 态应先切回 paused |
+| BUG-14 | 播放 `ended` 后未同时 pause timeline：此时 seek 回中间位置，作品继续播放但状态仍显示 ended | 中 | 已修复 | 2026-06-17 横屏 PR 手测发现，当日修复（主仓库 PR #1）。根因：`SegmentBuilder.ts:299` 的 `segmentTl.eventCallback("onComplete")` 只设 `isAutoPlaying=false` 并回调，没有 `timeline.pause()`。修复：onComplete 时显式 `segmentTl.pause()`，ended 后 timeline 处于 paused，seek 保持静态画面。模拟器手测确认 ended 后 seek 不再继续播放 |
 
 ## 6. 性能检查记录
 
