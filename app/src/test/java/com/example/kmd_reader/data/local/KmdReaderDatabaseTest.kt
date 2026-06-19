@@ -207,4 +207,60 @@ class KmdReaderDatabaseTest {
 
         assertEquals(0, draftDao.getByWorkId("rain-city").size)
     }
+
+    // ── Finding 1 回归：upsert 不能级联删子表 ──
+    // 旧实现用 @Insert(REPLACE)，是先删后插，会触发 local_revisions / local_drafts 的
+    // ON DELETE CASCADE。改成 @Upsert 后原地更新，progress/shelf 写入不能抹掉子表数据。
+
+    @Test
+    fun libraryUpsertDoesNotCascadeDeleteRevisions() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", progress = 0f))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "src", label = null, synced = false, cloudRevisionId = null,
+                createdAt = 1L, updatedAt = 1L
+            )
+        )
+
+        // 模拟 updateProgress：read-modify-upsert 路径
+        val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        libraryDao.upsert(existing.copy(readingProgress = 0.7f, lastReadAt = 999L))
+
+        val savedRevision = revisionDao.getActiveLocalRevision("rain-city")
+        assertNotNull("revision must survive a library upsert", savedRevision)
+        assertEquals("rev-1", savedRevision?.id)
+    }
+
+    @Test
+    fun libraryUpsertDoesNotCascadeDeleteDrafts() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        draftDao.upsert(LocalDraftEntity(id = "d1", workId = "rain-city", type = "issue", payload = "{}", updatedAt = 1L))
+
+        // 模拟 setOnShelf：read-modify-upsert 路径
+        val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        libraryDao.upsert(existing.copy(onShelf = true))
+
+        val savedDrafts = draftDao.getByWorkId("rain-city")
+        assertEquals("draft must survive a library upsert", 1, savedDrafts.size)
+    }
+
+    // ── Finding 2：revision 写入/清除契约（DAO 层，Repository 同型不重复测） ──
+
+    @Test
+    fun revisionUpsertThenClearForWorkEmptiesRevisions() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "src", label = "本地改", synced = false, cloudRevisionId = null,
+                createdAt = 1L, updatedAt = 1L
+            )
+        )
+        assertNotNull(revisionDao.getActiveLocalRevision("rain-city"))
+
+        revisionDao.clearForWork("rain-city")
+
+        assertNull(revisionDao.getActiveLocalRevision("rain-city"))
+    }
 }

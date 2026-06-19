@@ -34,7 +34,8 @@ abstract class KmdReaderDatabase : RoomDatabase() {
 
         // 显式 migration 2→3：新增 local_library / local_revisions / local_drafts 三张表。
         // 不依赖 fallbackToDestructiveMigration（会清空 works/script_issues）。
-        private val MIGRATION_2_3 = object : Migration(2, 3) {
+        // internal：迁移测试需要直接复跑 migrate()，验证 v2→v3 不丢数据、新表结构正确。
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """

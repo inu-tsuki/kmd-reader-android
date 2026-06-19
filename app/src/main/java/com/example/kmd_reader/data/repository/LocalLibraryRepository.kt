@@ -64,6 +64,8 @@ interface LocalLibraryRepository {
 
     // 内容级
     suspend fun getActiveLocalRevision(workId: String): LocalRevision?
+    suspend fun saveRevision(revision: LocalRevision)
+    suspend fun clearRevisionsForWork(workId: String)
 
     // 草稿级
     suspend fun getDrafts(workId: String): List<LocalDraft>
@@ -122,6 +124,14 @@ class RoomLocalLibraryRepository(
     override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
         revisionDao.getActiveLocalRevision(workId)?.toDomain()
 
+    override suspend fun saveRevision(revision: LocalRevision) {
+        revisionDao.upsert(revision.copy(updatedAt = nowMillis()).toEntity())
+    }
+
+    override suspend fun clearRevisionsForWork(workId: String) {
+        revisionDao.clearForWork(workId)
+    }
+
     override suspend fun getDrafts(workId: String): List<LocalDraft> =
         draftDao.getByWorkId(workId).map { it.toDomain() }
 
@@ -177,6 +187,15 @@ class InMemoryLocalLibraryRepository(
 
     override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
         revisions.filter { it.workId == workId && !it.synced }.maxByOrNull { it.updatedAt }
+
+    override suspend fun saveRevision(revision: LocalRevision) {
+        revisions.removeAll { it.id == revision.id }
+        revisions.add(revision.copy(updatedAt = nowMillis()))
+    }
+
+    override suspend fun clearRevisionsForWork(workId: String) {
+        revisions.removeAll { it.workId == workId }
+    }
 
     override suspend fun getDrafts(workId: String): List<LocalDraft> =
         drafts.filter { it.workId == workId }.sortedByDescending { it.updatedAt }
