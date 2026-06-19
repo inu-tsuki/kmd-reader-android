@@ -4,7 +4,9 @@ import android.content.Context
 import com.example.kmd_reader.data.local.KmdReaderDatabase
 import com.example.kmd_reader.data.remote.NetworkModule
 import com.example.kmd_reader.data.repository.FallbackWorkRepository
+import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.data.repository.OfflineFirstWorkRepository
+import com.example.kmd_reader.data.repository.RoomLocalLibraryRepository
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.webview.WebViewReaderRuntimeBridge
 
@@ -32,5 +34,13 @@ class KmdReaderAppContainer(context: Context) {
 
     val readerRuntimeBridge: ReaderRuntimeBridge by lazy {
         WebViewReaderRuntimeBridge()
+    }
+
+    val localLibraryRepository: LocalLibraryRepository by lazy {
+        RoomLocalLibraryRepository(
+            libraryDao = database.localLibraryDao(),
+            revisionDao = database.localRevisionDao(),
+            draftDao = database.localDraftDao()
+        )
     }
 }
