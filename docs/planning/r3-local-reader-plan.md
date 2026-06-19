@@ -1,9 +1,15 @@
-# R3：本地阅读器能力 —— 实施规划
+# R3：完善的本地阅读器 —— 实施规划
 
 > 文档状态：规划草案
-> 最近更新：2026-06-17
+> 最近更新：2026-06-19
 > 代号：R3
-> 权威范围：本地数据模型、书架、导入、阅读进度持久化的统一设计
+> 权威范围：本地数据模型、书架、导入、阅读进度持久化、设置、完整离线阅读体验
+
+## 定位
+
+R3 的目标是**一个拔掉网线也能完整使用的本地 KMD 阅读器**。与 R4（云端社区能力，多仓库协同）对应：R3 建本地完整，R4 建云端完整。
+
+R3 完成标准：不依赖任何后端，用户可以导入 `.kmd`、在书架管理、阅读并恢复进度、调整阅读偏好、做本地 issue/笔记。所有数据本地持久化。
 
 ## 0. 背景：为什么 R3 是数据架构阶段
 
@@ -288,16 +294,27 @@ LocalAnnotation
 - **不做**编辑 UI、diff 视图、revision 历史、云端同步链路
 - 接口为后续（作者纠错 / 审阅者评审 + 云端 revisions）预留
 
-### R3-F. 书架 UI（书架 + 阅读历史分离）
+### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）
 - MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null）
 - 卡片显示标题、进度、时间
 - 继续阅读入口
+- 书架页提供设置/关于入口（page-architecture 要求）
 
 ### R3-G. 加入书架
 - 浏览/详情页「加入书架」
 - 阅读自动记录历史
 
-### R3-H. 笔记/书签（视精力，纯预留或最小实现）
+### R3-H. 详情页「继续阅读」按钮态
+- 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）
+- 有进度时显示上次阅读位置摘要
+
+### R3-I. 设置页（阅读偏好）
+- 新建设置页：字号（fontScale）、主题（明/暗）、自动保存进度开关、reducedMotion（PRD 5.6/7.1）
+- 偏好持久化（DataStore Preferences）
+- 阅读时应用偏好：fontScale → ReaderSettings.fontScale，主题 → Compose 主题，reducedMotion → ReaderSettings.reducedMotion
+- reader_preferences 从"R3 不做"升级为 R3 必做（PRD MVP 要求）
+
+### R3-J. 笔记/书签（视精力，纯预留或最小实现）
 - local_annotations 表 + 基础 CRUD
 - 阅读中长按行加书签/笔记（最小 UI）
 - 书架/companion 展示笔记列表
@@ -310,23 +327,29 @@ R3-A 数据层（entry + issue override + revision [+ annotation]，无依赖）
   ├─→ R3-C issue 操作持久化
   ├─→ R3-D 本地导入
   ├─→ R3-E 本地轻度更改（存储+播放链路）
-  ├─→ R3-F 书架 UI
+  ├─→ R3-F 书架 UI（含设置入口）
   │    └─→ R3-G 加入书架
-  └─→ R3-H 笔记/书签（视精力）
+  ├─→ R3-H 详情页继续阅读按钮态（依赖 B 的进度）
+  ├─→ R3-I 设置页（阅读偏好，独立无依赖）
+  └─→ R3-J 笔记/书签（视精力）
 ```
 
-建议顺序：A → B → C → D → E → F → G，H 视精力。
+建议顺序：A → B → C → D → E → F → G → H → I，J 视精力。
+I（设置）独立无依赖，可与 D/E/F 并行。
 
 ## 5. 验收
 
+**完整本地阅读器标准（拔掉网线可用）：**
 - 导入本地 `.kmd` → 出现在书架 → 可阅读播放。
 - 社区/mock 作品阅读后 → 阅读历史显示 + 进度恢复。
 - 播放到中段退出 → 重新进入 → 恢复进度。
+- 详情页有进度时显示「继续阅读」+ 位置摘要。
 - issue close/reopen/draft 退出阅读后不丢。
-- 书架（主动收藏）和阅读历史（读过）分离展示。
+- 书架（主动收藏）和阅读历史（读过）分离展示，书架有设置入口。
 - 书架空状态友好。
+- 设置页可调字号/主题/自动保存/reducedMotion，偏好持久化，阅读时生效。
 - 本地轻度更改：有未同步 revision 时播放优先读取它（接口验证，无编辑 UI）。
-- （若实现 H）阅读中可加笔记/书签，companion 可查看。
+- （若实现 J）阅读中可加笔记/书签，companion 可查看。
 - `./gradlew :app:testDebugUnitTest` + `assembleDebug` 通过。
 - 不崩溃（mock 作品进度/issue 写入绕过外键陷阱）。
 
@@ -336,25 +359,17 @@ R3-A 数据层（entry + issue override + revision [+ annotation]，无依赖）
 - 不做完整编辑器。
 - 不做多设备同步。
 - 不重构 WorkRepository（社区发现链路保持不变）。
-- 不把 mock 作品写入 works 表。
-- **不做本地轻度更改的编辑 UI**（源文本编辑器、diff 视图、revision 历史浏览）——留后续切片；R3 只留存储接口 + 播放优先读取链路。
-- **不做云端 revision 同步链路**——依赖云端 revisions API + 协作体系，待云端就绪后实现。
-- **不做 reader_preferences**（fontScale/reducedMotion/速度/方向偏好）——记为空白，适合 DataStore，待有 UI 入口时实现。
-- **不做 discussion/评论**（归 R4，社区事实走 API）。
-- **不做 review 提交链路**（submitReview 是 dead code 就绪点，待 R4 接线）。
-
-## 6. 非目标
-
-- 不做生态级 `Work.presentation` 生成器（roadmap 已明确）。
-- 不做完整编辑器。
-- 不做多设备同步。
-- 不重构 WorkRepository（社区发现链路保持不变）。
 - 不把 mock 作品写入 works 表（保持 mock 在内存）。
+- **不做本地轻度更改的编辑 UI**——留后续切片；R3 只留存储接口 + 播放优先读取链路。
+- **不做云端 revision 同步链路**——R4 范畴。
+- **不做 discussion/评论**——R4 范畴（社区事实走 API）。
+- **不做 review 提交链路**——R4 范畴。
+- **不做 SourceAnchor 结构化位置引用**——R4 范畴（与 community-api 契约一起）。
 
 ## 7. 与既有规划的对齐
 
-- `roadmap.md` R3 章节的"阅读进度持久化"对应本规划的 R3-B。
-- `roadmap.md` R3 章节的"导入 .kmd"对应 R3-C。
-- `roadmap.md` R3 章节的"书架"对应 R3-D。
-- `runtime-ui-implementation-plan.md` UI-6 移入 R3 的决策已记录在 roadmap。
-- `prd.md` 的 ReadingProgressRecord（workId/progress/positionPayload/lastReadAt）与本规划的 LocalLibraryEntry 字段需对齐（本规划用 readingProgress/readingTimeMs/lastReadAt，语义更完整）。
+- `roadmap.md` R3 章节 → 本规划全面覆盖并扩展为"完善本地阅读器"。
+- `prd.md` 7.1 MVP 表 → 书架/导入/进度/设置/数据层均在 R3；审核工作台拆散到 R2 companion + R3-E + R4。
+- `page-architecture.md` → 书架含设置入口；审核体验在详情入口 + 阅读 companion（非独立 Tab）。
+- `runtime-ui-implementation-plan.md` UI-6 → 对应 R3-B。
+- R3 与 R4 的边界：R3 = 本地完整（离线可用），R4 = 云端完整（多仓库协同）。

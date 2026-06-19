@@ -1,13 +1,20 @@
-# R4：社区与审阅能力 —— 规划草案
+# R4：完善的云端社区阅读器 —— reader 侧子任务
 
 > 文档状态：规划草案
 > 最近更新：2026-06-19
 > 代号：R4
-> 权威范围：community-api 契约演进、issue/discussion 结构化、review 提交闭环、位置引用模型
+> 权威范围：本文档为 reader 侧子任务规划。R4 是多仓库协同任务，**总规划在主仓库** `docs/planning/roadmap/` 下，涵盖 community-api + runtime + reader 三方职责。
 
-## 0. 背景：R3 调研积累的认知
+## 定位
 
-R3 的 community-api 对齐调研识别出一批跨端契约差距。这些差距不是 reader 本地能解决的，必须 R4 在 community-api 与 reader 之间统一对齐。R4 是"让社区模型与 reader 模型真正对接"的阶段。
+R4 = 完善的云端社区阅读器，与 R3（完善的本地阅读器）对应。R3 完成后应用离线可用；R4 让联网后的社区能力完整。
+
+**R4 是多仓库协同任务**，涉及：
+- **community-api**：契约实质演进（issue 结构化、discussion、review、action log）
+- **runtime**（reader-runtime-web）：SourceAnchor 解析、inspection 增强
+- **reader**（android-reader）：消费新契约、云端交互、跳转统一
+
+本文档只覆盖 **reader 侧**子任务。community-api 和 runtime 的职责见主仓库 R4 总规划。
 
 ## 1. 现状基线
 
