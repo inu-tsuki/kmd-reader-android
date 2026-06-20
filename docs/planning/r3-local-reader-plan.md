@@ -266,6 +266,27 @@ LocalAnnotation
 - DI 接线
 - 单元测试
 
+#### R3-A 数据层 bug 修复记录
+
+> R3-A 落地后，对 `data/local/` 下全部 Dao 做了一次 `@Insert(REPLACE)` 级联风险扫查。
+> 模式：父表用 `@Insert(REPLACE)` 是先删后插，会触发子表 `ON DELETE CASCADE`，
+> 任何一次父表字段更新（刷新时间戳、改字段）都会误删子表数据。
+> 修法统一为 `@Upsert`（编译为 `INSERT … ON CONFLICT DO UPDATE`，原地更新）。
+
+- **Finding 1（PR #3）**：`LocalLibraryDao.upsert` 用 `@Insert(REPLACE)` →
+  `updateProgress` / `setOnShelf` 会级联删 `local_revisions` / `local_drafts`。改 `@Upsert`。
+- **Finding 2（PR #3）**：`LocalLibraryRepository` 缺 `saveRevision` / `clearRevisionsForWork`
+  契约，补齐。
+- **Finding 3（PR #3）**：`MIGRATION_2_3` 未暴露，迁移测试无法复跑。改 `internal` 可见 + 迁移测试。
+- **Finding 4（fix/r3-work-dao-cascade）**：`WorkDao.upsert` / `upsertAll` 用 `@Insert(REPLACE)` →
+  `works` 是 `script_issues` 的父表（`ON DELETE CASCADE`），刷新 work 元数据（`syncedAt` /
+  `activeRevisionId`）会级联删该 work 的全部 `script_issues`。与 Finding 1 同型。改 `@Upsert`，
+  加 `workUpsertDoesNotCascadeDeleteIssues` / `workUpsertAllDoesNotCascadeDeleteIssues` 回归。
+
+> 备注：`LocalRevisionDao.upsert` / `LocalDraftDao.upsert` 也用了 `@Insert(REPLACE)`，
+> 但它们是叶子表（无子表），REPLACE 不会级联删任何数据 —— 不是 bug。是否顺手统一为
+> `@Upsert` 仅是代码一致性问题，留待后续顺手处理。
+
 ### R3-B. 进度持久化（local_library.readingProgress 字段）
 - ViewModel 注入 LocalLibraryRepository
 - ready 后恢复 seek
