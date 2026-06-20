@@ -120,35 +120,30 @@ LocalLibraryEntry
 │    作者纠错 / 审阅者评审，改完同步云端                  │
 │    播放优先读取最新未同步版本                           │
 │    （一对多，外键→local_library.workId）                │
-├─ 社区协作级 ──────────────────────────────────────────┤
-│  local_issue_overrides                                 │
-│    对社区 issue 的本地操作（close/reopen/draft）        │
-│    issue 是作品级实体（绑 workId，非行级、非 revision） │
-│    location 是概念标签（如 "scene: crosswalk"），       │
-│    不是源码行号——社区 API 不提供结构化 sourceRange     │
+├─ 草稿级 ──────────────────────────────────────────────┤
+│  local_drafts                                          │
+│    通用草稿缓冲：issue/discussion/review 写到一半的内容 │
+│    不绑定具体社区实体类型，payload JSON 透传            │
 │    （一对多，外键→local_library.workId）                │
 ├─ 个人行级 ────────────────────────────────────────────┤
 │  local_annotations（视精力）                           │
 │    用户私有笔记/书签（附着在源码行或时间点）            │
-│    与 issue 分表：笔记是个人私有，issue 是社区协作       │
 │    （一对多，外键→local_library.workId）                │
 ├─ 全局级 ──────────────────────────────────────────────┤
-│  reader_preferences（未来，DataStore）                  │
+│  reader_preferences（DataStore，R3-I）                  │
 │    不绑定具体作品的偏好：fontScale、reducedMotion、     │
 │    默认方向、chrome pinned 策略                         │
 └────────────────────────────────────────────────────────┘
 ```
 
 **为什么按附着对象分层而非数据类型混合：**
-- issue 和笔记都"可能"涉及源码位置，但语义不同：issue 是社区协作审阅（绑 workId，location 是概念标签），笔记是个人私有记录（附着在具体行/时间点）。社区 API 的 issue **没有结构化 sourceRange**，location 是自由文本标签（如 `"scene: crosswalk"`），Android 只能启发式猜行号——issue 本质是作品级/社区协作级实体，不是行级附属。
+- issue/discussion/review 的**社区操作**（close/reopen/提交）本质是云端行为，本地持久化会制造状态分裂——离线关闭的 issue 别人看不到，价值低。issue 和 discussion 应统一为云端模型（R4）。R3 只保留"草稿缓冲"（写到一半防丢），不做社区操作的本地化。
 - 阅读进度是作品级标量，不是行级实体，放 local_library 字段即可。
 - 偏好不绑定作品（全局级），适合 DataStore 而非 Room。
 
-**与 community-api 模型的已知差距（2026-06-19 对齐调研）：**
-- issue 的 `location` 在 API 端是概念标签，不是行号；Android 的 `KmdSourceSnapshot.lineNumberForIssue()` 启发式猜行号大部分会失败。本地 issue override 不应假设有可靠行号。
-- `IssueSource` 枚举不对齐（API 5 值 / Android 8 值，`syntax≠Parser`）；`Layout/Effect/Asset` 来源经 API 往返会丢失。
-- issue 无 `revisionId`、无 `status`、无 `createdAt`（设计文档规划但 API 未实现）。本地 override 的 close/reopen 是纯客户端状态，API 暂无对应端点（`POST /issues/:id/actions` 未实现）。
-- 这些差距是 community-api 与 reader 之间的契约问题，需在 R4（社区能力）统一对齐，R3 只负责本地 override 持久化，不修 API 契约。
+**issue/discussion 本地化的决策（2026-06-19）：**
+- 不建 `local_issue_overrides`：close/reopen/提交归 R4 云端。本地持久化这些操作会制造"本地标记 closed 但云端仍 open"的状态分裂，且 issue（社区协作）和 discussion 应统一实现。
+- 只建 `local_drafts`：issue/discussion/review 写到一半的草稿本地缓冲（写到一半退出不丢）。payload 是 JSON 透传，R3 不关心内部结构，各类型自己序列化。R3-B 时 issue draft 写入此表；R4 时 discussion/review draft 也用此表。
 
 ### 2.5 local_library（作品级，R3 核心）
 
@@ -170,26 +165,26 @@ LocalLibraryEntry
 
 自包含、无外键指向 `works`，避免 mock 作品不在 Room 的崩溃陷阱。
 
-### 2.6 local_issue_overrides（行级，R3）
+### 2.6 local_drafts（草稿级，通用缓冲）
+
+issue/discussion/review 的社区操作（close/reopen/提交）归 R4 云端。R3 只保留"写到一半的草稿"本地缓冲：
 
 ```text
-LocalIssueOverride
-  ├─ id: String（主键，"{workId}:{issueId}"）
+LocalDraft
+  ├─ id: String（主键，"draft-{uuid}"）
   ├─ workId: String（外键 → local_library.workId，CASCADE）
-  ├─ issueId: String
-  ├─ status: String（Open / Closed）
-  ├─ reason: String?
-  ├─ draftMessage: String?
-  ├─ draftSuggestion: String?
+  ├─ type: String（"issue" | "discussion" | "review"）
+  ├─ payload: String（JSON，各类型自己的字段序列化）
   └─ updatedAt: Long
 ```
 
-issue 台账本身（id/workId/severity/source/location/message/suggestion）是社区事实，走 WorkRepository（API + script_issues 缓存）。本地只存"用户的操作覆盖"。
+- R3 只建表 + 存取接口（saveDraft / getDrafts / deleteDraft）。
+- payload 是 JSON 透传，R3 不关心内部结构——issue draft 存 IssueDraft 的 JSON，discussion/review 各自序列化。
+- R3-B 时 issue draft 写入此表；R4 时 discussion/review draft 也用此表。
+- 提交云端成功后删除对应 draft（R4 消费）。
 
-**注意（2026-06-19 对齐调研）**：issue 不是行级实体。社区 API 的 `location` 是概念标签（如 `"scene: crosswalk"`、`"whole script"`），不是源码行号。issue 绑在 `workId` 上，没有 `revisionId`、没有 `status`、没有结构化 `sourceRange`。Android 的 `KmdSourceSnapshot.lineNumberForIssue()` 只能启发式猜行号，大部分概念标签猜不出。因此：
-- 本地 override 不依赖行号，只依赖 issueId + workId。
-- UI 展示 issue 时，location 无法可靠映射到源码行的，直接显示原始标签文本（现有 `ReaderCompanionContainer` 已有此 fallback）。
-- issue 的 `status`（open/closed/resolved）在 API 端尚未实现（`POST /issues/:id/actions` 未实现），本地 override 的 close/reopen 是纯客户端状态，R4 统一对齐 API 契约。
+**为什么不建 local_issue_overrides（2026-06-19 决策）：**
+issue/discussion/review 的 close/reopen/提交本质是云端行为。本地持久化这些操作会制造状态分裂（本地 closed 但云端 open，别人看不到）。issue 和 discussion 应统一为云端模型（R4）。R3 只做"草稿防丢"，不做社区操作本地化。
 
 **位置引用与跳转的设计偏差（2026-06-19 识别，归 R4）：**
 
@@ -202,7 +197,7 @@ issue 台账本身（id/workId/severity/source/location/message/suggestion）是
 - 定义结构化 `SourceAnchor` 概念，支持多种位置形式（行号 / 场景标签 / 时间点 / 范围 / 无位置）。
 - issue/discussion/review/笔记携带 `SourceAnchor` 列表，跳转行为统一消费它。
 - 这要求 community-api 的 `location` 字段从自由文本演进为结构化形式——是跨端契约变更，reader 无法独立解决。
-- **R3 不动**：local_issue_overrides 只存 issueId + workId + status，不涉及位置引用建模。现有 `lineNumberForIssue()` 启发式保持原样（已知不完美，但在 API 契约演进前是唯一可行方案）。
+- **R3 不动**：不涉及位置引用建模。现有 `lineNumberForIssue()` 启发式保持原样（已知不完美，但在 API 契约演进前是唯一可行方案）。
 
 ### 2.7 local_revisions（本地轻度更改 / 待同步缓冲）
 
@@ -255,19 +250,19 @@ LocalAnnotation
 
 ### 2.10 Room migration 策略
 
-- version 2 → 3，新增 `local_library` + `local_issue_overrides`（+ 可选 `local_annotations`）。
-- 显式 `Migration(2, 3)`（CREATE TABLE），保留 `fallbackToDestructiveMigration` 兜底。
+- version 2 → 3，新增 `local_library` + `local_revisions` + `local_drafts`（+ 可选 `local_annotations`）。
+- 显式 `Migration(2, 3)`（CREATE TABLE ×3），保留 `fallbackToDestructiveMigration` 兜底。
 - 所有新表自包含或外键指向 `local_library`（不是 `works`）。
 
 ## 3. 工作包
 
-### R3-A. 数据层（local_library + local_issue_overrides [+ local_revisions] [+ local_annotations]）
+### R3-A. 数据层（local_library + local_revisions + local_drafts）
 - 新建 `LocalLibraryEntity`（onShelf / lastReadAt / readingProgress）+ `LocalLibraryDao`
-- 新建 `LocalIssueOverrideEntity`（外键→local_library）+ `LocalIssueOverrideDao`
 - 新建 `LocalRevisionEntity`（外键→local_library）+ `LocalRevisionDao`（仅接口预留）
+- 新建 `LocalDraftEntity`（外键→local_library）+ `LocalDraftDao`（通用草稿缓冲）
 - 可选：`LocalAnnotationEntity`（外键→local_library）+ `LocalAnnotationDao`，纯 schema 预留
 - migration(2,3)
-- 新建 `LocalLibraryRepository`（接口 + Room 实现 + InMemory 默认）：entry CRUD + 进度 + issue override + revision + annotation 读写
+- 新建 `LocalLibraryRepository`（接口 + Room 实现 + InMemory 默认）：entry CRUD + 进度 + shelf + revision + draft 读写
 - DI 接线
 - 单元测试
 
@@ -278,10 +273,10 @@ LocalAnnotation
 - onCleared 落盘
 - 首次阅读自动创建 entry（onShelf=false）
 
-### R3-C. 本地 issue 操作持久化
-- issueStatusOverrides / issueDraft / playbackAnchors → local_issue_overrides
-- 进入阅读时恢复
-- close/reopen/draft 同步写入
+### R3-C. issue 草稿本地缓冲
+- issue draft（写到一半的 message + suggestion）写入 local_drafts（type="issue"）
+- 进入阅读时从 local_drafts 恢复未提交的 issue 草稿
+- close/reopen 不本地持久化（归 R4 云端 action log）
 
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器
@@ -322,9 +317,9 @@ LocalAnnotation
 ## 4. 依赖与顺序
 
 ```text
-R3-A 数据层（entry + issue override + revision [+ annotation]，无依赖）
+R3-A 数据层（entry + revision + drafts [+ annotation]，无依赖）
   ├─→ R3-B 进度持久化
-  ├─→ R3-C issue 操作持久化
+  ├─→ R3-C issue 草稿本地缓冲
   ├─→ R3-D 本地导入
   ├─→ R3-E 本地轻度更改（存储+播放链路）
   ├─→ R3-F 书架 UI（含设置入口）

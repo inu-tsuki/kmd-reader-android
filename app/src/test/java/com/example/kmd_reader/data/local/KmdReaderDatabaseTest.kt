@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +22,9 @@ class KmdReaderDatabaseTest {
     private lateinit var database: KmdReaderDatabase
     private lateinit var workDao: WorkDao
     private lateinit var issueDao: ScriptIssueDao
+    private lateinit var libraryDao: LocalLibraryDao
+    private lateinit var revisionDao: LocalRevisionDao
+    private lateinit var draftDao: LocalDraftDao
 
     @Before
     fun createDatabase() {
@@ -30,6 +34,9 @@ class KmdReaderDatabaseTest {
             .build()
         workDao = database.workDao()
         issueDao = database.scriptIssueDao()
+        libraryDao = database.localLibraryDao()
+        revisionDao = database.localRevisionDao()
+        draftDao = database.localDraftDao()
     }
 
     @After
@@ -77,5 +84,183 @@ class KmdReaderDatabaseTest {
         val saved = issueDao.getByWorkId("glass-rail")
         assertEquals(1, saved.size)
         assertEquals(2L, saved.single().syncedAt)
+    }
+
+    // ── local_library ──
+
+    private fun libraryEntry(
+        workId: String = "rain-city",
+        onShelf: Boolean = true,
+        progress: Float = 0f,
+        lastReadAt: Long? = null,
+        importedAt: Long? = null
+    ) = LocalLibraryEntity(
+        workId = workId,
+        source = "Mock",
+        onShelf = onShelf,
+        title = "雨城慢镜",
+        authorName = "Mira",
+        presentationMode = "Stage",
+        aspectRatio = "9:16",
+        kmdSource = null,
+        contentUri = "mock/rain-city.kmd",
+        readingProgress = progress,
+        readingTimeMs = null,
+        readingDurationMs = null,
+        lastReadAt = lastReadAt,
+        importedAt = importedAt,
+        cachedAt = null
+    )
+
+    @Test
+    fun libraryShelfReturnsOnlyOnShelfEntries() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", onShelf = true, importedAt = 100L))
+        libraryDao.upsert(libraryEntry("glass-rail", onShelf = false, lastReadAt = 200L))
+
+        val shelf = libraryDao.getShelf()
+        assertEquals(1, shelf.size)
+        assertEquals("rain-city", shelf.single().workId)
+    }
+
+    @Test
+    fun libraryHistoryReturnsOnlyReadEntriesOrderedByLastReadAt() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", onShelf = false, lastReadAt = 100L))
+        libraryDao.upsert(libraryEntry("glass-rail", onShelf = false, lastReadAt = 300L))
+        libraryDao.upsert(libraryEntry("star-manual", onShelf = false, lastReadAt = null))
+
+        val history = libraryDao.getHistory()
+        assertEquals(2, history.size)
+        assertEquals("glass-rail", history.first().workId)
+    }
+
+    @Test
+    fun libraryUpdateProgressReplacesExistingEntry() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", progress = 0f))
+        val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        libraryDao.upsert(existing.copy(readingProgress = 0.5f, readingTimeMs = 2500L, lastReadAt = 999L))
+
+        val saved = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        assertEquals(0.5f, saved.readingProgress)
+        assertEquals(999L, saved.lastReadAt)
+    }
+
+    // ── local_revisions ──
+
+    @Test
+    fun revisionGetActiveReturnsLatestUnsynced() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "---\nmode: stage\n---\nold", label = null,
+                synced = true, cloudRevisionId = "cloud-1", createdAt = 1L, updatedAt = 1L
+            )
+        )
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-2", workId = "rain-city", baseRevisionId = "base",
+                source = "---\nmode: stage\n---\nnew", label = null,
+                synced = false, cloudRevisionId = null, createdAt = 2L, updatedAt = 5L
+            )
+        )
+
+        val active = requireNotNull(revisionDao.getActiveLocalRevision("rain-city"))
+        assertEquals("rev-2", active.id)
+        assertEquals(false, active.synced)
+    }
+
+    @Test
+    fun revisionCascadeDeleteWhenLibraryEntryRemoved() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "src", label = null, synced = false, cloudRevisionId = null,
+                createdAt = 1L, updatedAt = 1L
+            )
+        )
+
+        libraryDao.deleteByWorkId("rain-city")
+
+        assertNull(revisionDao.getActiveLocalRevision("rain-city"))
+    }
+
+    // ── local_drafts ──
+
+    @Test
+    fun draftGetByWorkIdAndTypeFiltersCorrectly() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        draftDao.upsert(LocalDraftEntity(id = "d1", workId = "rain-city", type = "issue", payload = "{}", updatedAt = 1L))
+        draftDao.upsert(LocalDraftEntity(id = "d2", workId = "rain-city", type = "discussion", payload = "{}", updatedAt = 2L))
+
+        val issues = draftDao.getByWorkIdAndType("rain-city", "issue")
+        assertEquals(1, issues.size)
+        assertEquals("d1", issues.single().id)
+    }
+
+    @Test
+    fun draftCascadeDeleteWhenLibraryEntryRemoved() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        draftDao.upsert(LocalDraftEntity(id = "d1", workId = "rain-city", type = "issue", payload = "{}", updatedAt = 1L))
+
+        libraryDao.deleteByWorkId("rain-city")
+
+        assertEquals(0, draftDao.getByWorkId("rain-city").size)
+    }
+
+    // ── Finding 1 回归：upsert 不能级联删子表 ──
+    // 旧实现用 @Insert(REPLACE)，是先删后插，会触发 local_revisions / local_drafts 的
+    // ON DELETE CASCADE。改成 @Upsert 后原地更新，progress/shelf 写入不能抹掉子表数据。
+
+    @Test
+    fun libraryUpsertDoesNotCascadeDeleteRevisions() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", progress = 0f))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "src", label = null, synced = false, cloudRevisionId = null,
+                createdAt = 1L, updatedAt = 1L
+            )
+        )
+
+        // 模拟 updateProgress：read-modify-upsert 路径
+        val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        libraryDao.upsert(existing.copy(readingProgress = 0.7f, lastReadAt = 999L))
+
+        val savedRevision = revisionDao.getActiveLocalRevision("rain-city")
+        assertNotNull("revision must survive a library upsert", savedRevision)
+        assertEquals("rev-1", savedRevision?.id)
+    }
+
+    @Test
+    fun libraryUpsertDoesNotCascadeDeleteDrafts() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        draftDao.upsert(LocalDraftEntity(id = "d1", workId = "rain-city", type = "issue", payload = "{}", updatedAt = 1L))
+
+        // 模拟 setOnShelf：read-modify-upsert 路径
+        val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        libraryDao.upsert(existing.copy(onShelf = true))
+
+        val savedDrafts = draftDao.getByWorkId("rain-city")
+        assertEquals("draft must survive a library upsert", 1, savedDrafts.size)
+    }
+
+    // ── Finding 2：revision 写入/清除契约（DAO 层，Repository 同型不重复测） ──
+
+    @Test
+    fun revisionUpsertThenClearForWorkEmptiesRevisions() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        revisionDao.upsert(
+            LocalRevisionEntity(
+                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
+                source = "src", label = "本地改", synced = false, cloudRevisionId = null,
+                createdAt = 1L, updatedAt = 1L
+            )
+        )
+        assertNotNull(revisionDao.getActiveLocalRevision("rain-city"))
+
+        revisionDao.clearForWork("rain-city")
+
+        assertNull(revisionDao.getActiveLocalRevision("rain-city"))
     }
 }
