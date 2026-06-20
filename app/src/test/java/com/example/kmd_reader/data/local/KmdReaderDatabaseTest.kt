@@ -86,6 +86,53 @@ class KmdReaderDatabaseTest {
         assertEquals(2L, saved.single().syncedAt)
     }
 
+    // ── WorkDao 级联回归（与 LocalLibraryDao Finding 1 同型）──
+    // works 是 script_issues 的父表（ON DELETE CASCADE）。旧 WorkDao.upsert 用
+    // @Insert(REPLACE)（先删后插），任何 work 字段更新（刷新 syncedAt、改
+    // activeRevisionId）都会把该 work 的全部 script_issues 级联抹掉。
+    // 改成 @Upsert 后原地更新，work 写入不能抹掉 issue 子表数据。
+
+    @Test
+    fun workUpsertDoesNotCascadeDeleteIssues() = runTest {
+        val work = MockWorks.works.first { it.id == "glass-rail" }
+        val issues = requireNotNull(MockWorks.issues["glass-rail"])
+        workDao.upsert(work.toEntity(syncedAt = 1L))
+        issueDao.upsertAll(issues.map { it.toEntity(syncedAt = 1L) })
+
+        // 模拟刷新 work 元数据：read-modify-upsert 路径
+        val existing = requireNotNull(workDao.getById("glass-rail"))
+        workDao.upsert(existing.copy(syncedAt = 2L, title = "玻璃轨道 (已更新)"))
+
+        val savedIssues = issueDao.getByWorkId("glass-rail")
+        assertEquals(
+            "issues must survive a work upsert; REPLACE would have cascade-deleted them",
+            issues.size,
+            savedIssues.size
+        )
+        val savedWork = requireNotNull(workDao.getById("glass-rail"))
+        assertEquals(2L, savedWork.syncedAt)
+        assertEquals("玻璃轨道 (已更新)", savedWork.title)
+    }
+
+    @Test
+    fun workUpsertAllDoesNotCascadeDeleteIssues() = runTest {
+        val work = MockWorks.works.first { it.id == "glass-rail" }
+        val issues = requireNotNull(MockWorks.issues["glass-rail"])
+        workDao.upsert(work.toEntity(syncedAt = 1L))
+        issueDao.upsertAll(issues.map { it.toEntity(syncedAt = 1L) })
+
+        // 批量刷新：upsertAll 走同样路径
+        val existing = requireNotNull(workDao.getById("glass-rail"))
+        workDao.upsertAll(listOf(existing.copy(syncedAt = 3L)))
+
+        val savedIssues = issueDao.getByWorkId("glass-rail")
+        assertEquals(
+            "issues must survive a work upsertAll",
+            issues.size,
+            savedIssues.size
+        )
+    }
+
     // ── local_library ──
 
     private fun libraryEntry(
