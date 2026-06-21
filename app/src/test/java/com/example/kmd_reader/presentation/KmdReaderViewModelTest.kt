@@ -551,6 +551,231 @@ class KmdReaderViewModelTest {
         assertEquals(2_000L, entry?.lastReadAt)
     }
 
+    // ===== PR #5 审阅修复回归 =====
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleReadyEventDoesNotMutateSessionWhenDeskStackMovedOn() = runTest {
+        // F1：切到 work B 后，work A 迟到的 Ready 不能把 session 改回 A。
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = InMemoryLocalLibraryRepository()
+        )
+
+        // 加载 work A 到 Ready，再切到 work B。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+
+        // 迟到的 A.Ready 到达（deskStack.currentWorkId 已是 B）。
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        val session = viewModel.state.value.readerSession
+        assertTrue(
+            "stale A.Ready must not flip session back to A; expected B-related, got $session",
+            session !is ReaderSessionState.Ready || session.workId == "rain-city"
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleProgressEventDoesNotPersistWhenDeskStackMovedOn() = runTest {
+        // F1：切到 work B 后，work A 迟到的 ProgressChanged 不能写脏 B 的进度。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        // work A Ready，落一笔正常进度。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.2f, timeMs = 480, durationMs = 2400))
+        advanceUntilIdle()
+
+        // 切到 work B（首次打开，entry 初值 progress=0）。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+
+        // 迟到的 A.ProgressChanged(0.99) 到达——绝不能写进 B 的 entry。
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.99f, timeMs = 2376, durationMs = 2400))
+        advanceUntilIdle()
+
+        val rainEntry = localLibrary.getEntry("rain-city")
+        assertTrue(
+            "stale A progress must not poison B's entry; got ${rainEntry?.readingProgress}",
+            rainEntry == null || rainEntry.readingProgress < 0.9f
+        )
+        // A 的 entry 也不应被这次迟到事件改写（仍是 0.2）。
+        assertEquals(0.2f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun restoreSeekThenFlushBeforeProgressEchoPersistsRestoredProgress() = runTest {
+        // F2：Ready→restore(0.42)→立即 flush（runtime 还没 echo ProgressChanged），
+        // 必须写入恢复点 0.42，而非 Ready 设的 0f。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        // restore seek 已执行（seekCalls=0.42），此时不发任何 ProgressChanged，直接 flush。
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
+        viewModel.flushProgressOnCleared()
+
+        val entry = localLibrary.getEntry("glass-rail")
+        assertEquals(
+            "flush before progress echo must persist restored progress, not 0f",
+            0.42f,
+            entry?.readingProgress ?: -1f,
+            0.001f
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun throttleResetsAcrossWorks() = runTest {
+        // F3：work A 刚落盘（节流窗口内），立即开 work B，B 的首个进度事件不应被 A 的窗口误杀。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        // work A Ready + 首个进度落盘（clock=0，触发首次写）。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.1f, timeMs = 240, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(0.1f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
+
+        // 1 秒后切到 work B（仍在 A 的 5s 节流窗口内）。
+        clock = 1_000L
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+
+        // B 的首个进度事件——必须写入，不被 A 的节流窗口误杀。
+        clock = 1_001L
+        runtimeBridge.emit(progressEvent("rain-city", progress = 0.3f, timeMs = 900, durationMs = 3000))
+        advanceUntilIdle()
+        assertEquals(
+            "per-work throttle must let B's first event through despite A's window",
+            0.3f,
+            localLibrary.getEntry("rain-city")?.readingProgress ?: -1f,
+            0.001f
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyDoesNotRestoreSeekWhenSavedDurationIsNull() = runTest {
+        // OQ（严格语义）：entry.readingDurationMs=null（旧 entry 无 duration 记录），
+        // 即便 event 上报了 duration，也不恢复 seek（无可靠基准）。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // durationMs=null 模拟旧 entry。
+        val work = MockWorks.works.first { it.id == "glass-rail" }
+        localLibrary.upsertEntry(
+            LocalLibraryEntry(
+                workId = "glass-rail",
+                source = work.sourceType,
+                onShelf = false,
+                title = work.title,
+                authorName = work.authorName,
+                presentationMode = work.presentation.mode,
+                aspectRatio = work.presentation.aspectRatio,
+                kmdSource = null,
+                contentUri = work.contentUri,
+                readingProgress = 0.42f,
+                readingTimeMs = null,
+                readingDurationMs = null,
+                lastReadAt = null,
+                importedAt = null,
+                cachedAt = null
+            )
+        )
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        assertTrue(
+            "must not restore seek when saved duration is null (no reliable baseline)",
+            runtimeBridge.seekCalls.isEmpty()
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyDoesNotRestoreSeekWhenEventDurationIsNull() = runTest {
+        // OQ（严格语义）：entry 有 duration 但 event.durationMs=null，也不恢复。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        // event 不带 durationMs。
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = null))
+        advanceUntilIdle()
+
+        assertTrue(
+            "must not restore seek when event duration is null (no reliable baseline)",
+            runtimeBridge.seekCalls.isEmpty()
+        )
+    }
+
     private fun progressEntry(
         workId: String,
         progress: Float,

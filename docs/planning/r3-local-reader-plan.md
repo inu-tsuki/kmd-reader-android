@@ -317,8 +317,9 @@ LocalAnnotation
 ##### 步骤 3：Ready 后恢复 seek（含 duration 匹配守卫）
 - 位置：`handleRuntimeEvent` 的 `ReaderRuntimeEvent.Ready` 分支（`:231-251`）`_state.update {...}` 之后。
 - `viewModelScope.launch` 读 `localLibrary.getEntry(event.workId)`：
-  - 有 entry 且 `readingProgress` ∈ (0,1) 且 `readingDurationMs == event.durationMs` → `runtimeBridge.seek(readingProgress)`。
+  - 有 entry 且 `readingProgress` ∈ (0,1) 且 `readingDurationMs` 与 `event.durationMs` **双方都非 null 且相等** → `runtimeBridge.seek(readingProgress)`。
   - duration 不匹配（换源/修订导致 duration 变化）→ 不恢复，防"旧进度 + 新 duration = 跳到错位置"。
+  - **任一方为 null（无可靠基准）→ 不恢复**（OQ 审阅决议：严格语义。新作品首次阅读时 entry.readingDurationMs=null，但此时 progress=0 已被 `progress ∈ (0,1)` 守卫拦住，严格语义对其无实际影响）。
   - progress=0 或无 entry → 不 seek（首次阅读/已读完）。
 - 直接调 `runtimeBridge.seek` 而非 `onAction(SeekReader)`，避免重复 reduce；失败静默。
 
@@ -341,6 +342,17 @@ LocalAnnotation
 4. `progressChangedThrottledWrites`：进 Ready → 连发多个 ProgressChanged（间隔 <5s）→ assert 写 1 次；`nowMillis` 推进 ≥5s 再发一个 → assert 写第 2 次。
 5. `progressChangedPersistsProgressFields`：节流写入后 assert entry 的 readingProgress/readingTimeMs/readingDurationMs 与事件一致。
 6. `onClearedFlushesLatestProgress`：进 Ready + 发 ProgressChanged（未到节流窗口）→ `onCleared()` → assert entry 含最新 progress（兜底落盘生效）。
+
+#### 审阅修复（PR #5 review，2026-06-21）
+
+R3-B 首版落 PR #5 后审阅发现 1 High + 2 Medium 数据完整性风险 + 1 Open Question，全部修复：
+
+- **F1（High）迟到事件 workId 门控**：WebView 单例复用，切 work 后旧 work 的迟到 `Ready`/`ProgressChanged` 仍能到达。原代码无条件用 `event.workId` 重建 session + 写 Room → 数据腐败。修复：以 `deskStack.currentWorkId` 为基准门控（OpenWork 立即更新它，比 readerSession 更早反映切换）。`sessionId` 不可用（每个 WebView 进程固定一次，跨 work swap 不变）。
+- **F2（Medium）restore seek 后回写 state**：`Ready` 设 `progress=0f`，restore 只调 `bridge.seek` 不回写 state，restore 与 runtime echo `ProgressChanged` 之间若 `onCleared`，flush 写 `0f` 覆盖恢复点。修复：seek 成功后回写 `session.progress`。
+- **F3（Medium）节流计数器 per-work**：`lastProgressSavedAt` 原为 ViewModel 全局单值，work A 存盘后 5s 内开 work B，B 的首个进度事件被误中 A 的窗口而丢弃。修复：改为 `mutableMapOf<String, Long>()` by workId，map 不含 key 即首次（同时移除 `hasSavedProgress` 标志）。
+- **OQ（Open Question）duration 守卫严格化**：原代码"任一 null 就恢复"（宽松），与文档 `==` 措辞不符。决议：**严格——双方都非 null 且相等才恢复**（最保守，无可靠基准不恢复）。对齐代码注释与本节措辞。
+
+新增 6 个回归用例（`staleReadyEventDoesNotMutateSession...` / `staleProgressEventDoesNotPersist...` / `restoreSeekThenFlushBeforeProgressEcho...` / `throttleResetsAcrossWorks` / `readyDoesNotRestoreSeekWhenSavedDurationIsNull` / `readyDoesNotRestoreSeekWhenEventDurationIsNull`），KmdReaderViewModelTest 20 → 26 用例。
 
 #### 不做（范围外）
 
