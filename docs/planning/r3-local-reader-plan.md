@@ -288,11 +288,76 @@ LocalAnnotation
 > `@Upsert` 仅是代码一致性问题，留待后续顺手处理。
 
 ### R3-B. 进度持久化（local_library.readingProgress 字段）
-- ViewModel 注入 LocalLibraryRepository
-- ready 后恢复 seek
-- progressChanged 节流写入
-- onCleared 落盘
-- 首次阅读自动创建 entry（onShelf=false）
+
+#### 范围（R3-B 实施时确认）
+
+- **纯进度持久化**：不纳入"自动保存进度开关"（开关归 R3-I 设置页，需要 DataStore reader_preferences）。
+- **节流策略**：时间间隔节流（播放中定时落盘，默认 5s）+ `onCleared` 兜底落盘。
+
+#### 落地现状（R3-B 实施前调研）
+
+- **落点已就绪（R3-A 交付）**：`LocalLibraryRepository` 已有 `getEntry` / `updateProgress(workId, progress, timeMs, durationMs, now)` / `upsertEntry`（接口 `data/repository/LocalLibraryRepository.kt:55-75`，Room + `InMemoryLocalLibraryRepository` 双实现齐全）。
+- **关键约束**：`updateProgress` 在 **entry 不存在时直接 return（空操作）**（`RoomLocalLibraryRepository.kt:104`、`InMemoryLocalLibraryRepository.kt:175`）。因此"首次阅读自动创建 entry"是进度写入的前置条件，必须先于任何进度写入执行。
+- **唯一接入缺口**：`KmdReaderViewModel` 构造函数（`:28-32`）未注入 `LocalLibraryRepository`；`MainActivity.kt:18-23` 的 `Factory` 与 `AppContainer.localLibraryRepository`（`KmdReaderAppContainer.kt:39-45`）已造好但没接进 ViewModel。
+- **进度事件链路完备**：`Ready(durationMs)` → `ProgressChanged(progress/timeMs/durationMs)` → `seek(progress)` 全部就绪。
+- **时序安全结论**：进度恢复的安全路径是"业务 `Ready` 事件到达 → ViewModel 进入 `Ready` 态 → 读持久化进度 → seek"。`seekReader()`（`:392-404`）有"必须 Ready 才 seek"守卫，不能在 Ready 前 seek。
+
+#### 实施步骤
+
+##### 步骤 1：ViewModel 注入 LocalLibraryRepository（接入点）
+- `KmdReaderViewModel` 构造函数新增参数 `localLibrary: LocalLibraryRepository`，默认值 `InMemoryLocalLibraryRepository()`（保持现有测试/调用不破）。
+- `KmdReaderViewModel.Factory`（`:666-677`）新增 `localLibrary` 字段并在 `create()` 传入。
+- `MainActivity.kt:18-23` 的 Factory 调用补 `localLibrary = appContainer.localLibraryRepository`。
+
+##### 步骤 2：首次阅读自动创建 entry（onShelf=false）
+- 位置：`loadCurrentReaderWork()`（`:127-199`）的 `viewModelScope.launch` 内，拿到 `source` 后、`runtimeBridge.load(...)` 前。
+- 语义：`getEntry(work.id)` 先判存在性，不存在才 `upsertEntry(...)`（走 get-then-insert，不盲目 upsert，避免覆盖已有进度）。
+- entry 字段取值（Work → LocalLibraryEntry）：`workId`=work.id、`source`=work.sourceType、`onShelf`=false、`title`=work.title、`authorName`=work.authorName、`presentationMode`=work.presentation.mode、`aspectRatio`=work.presentation.aspectRatio、`contentUri`=work.contentUri、`readingProgress`=0f，时间字段（readingTimeMs/readingDurationMs/lastReadAt/importedAt/cachedAt）=null，`kmdSource`=null。
+
+##### 步骤 3：Ready 后恢复 seek（含 duration 匹配守卫）
+- 位置：`handleRuntimeEvent` 的 `ReaderRuntimeEvent.Ready` 分支（`:231-251`）`_state.update {...}` 之后。
+- `viewModelScope.launch` 读 `localLibrary.getEntry(event.workId)`：
+  - 有 entry 且 `readingProgress` ∈ (0,1) 且 `readingDurationMs` 与 `event.durationMs` **双方都非 null 且相等** → `runtimeBridge.seek(readingProgress)`。
+  - duration 不匹配（换源/修订导致 duration 变化）→ 不恢复，防"旧进度 + 新 duration = 跳到错位置"。
+  - **任一方为 null（无可靠基准）→ 不恢复**（OQ 审阅决议：严格语义。新作品首次阅读时 entry.readingDurationMs=null，但此时 progress=0 已被 `progress ∈ (0,1)` 守卫拦住，严格语义对其无实际影响）。
+  - progress=0 或无 entry → 不 seek（首次阅读/已读完）。
+- 直接调 `runtimeBridge.seek` 而非 `onAction(SeekReader)`，避免重复 reduce；失败静默。
+
+##### 步骤 4：progressChanged 时间间隔节流写入
+- 位置：`handleRuntimeEvent` 的 `ProgressChanged` 分支（`:252-283`）末尾。
+- 新增实例字段 `private var lastProgressSavedAt: Long = 0L`（与 `nowMillis` 同一时钟）。
+- `viewModelScope.launch`：当 `nowMillis() - lastProgressSavedAt >= PROGRESS_SAVE_INTERVAL_MS`（companion const，默认 **5000ms**）→ `updateProgress(workId, progress, timeMs, durationMs, nowMillis())`，更新 `lastProgressSavedAt`。失败静默。
+- 5s 间隔依据：单本 20min 作品播放期间写 ~240 次（vs 不节流的数千次），断电最多丢 5s 进度；Room WAL 下单写 <1ms 不影响 UI。
+
+##### 步骤 5：onCleared 落盘（兜底）
+- 位置：`onCleared()`（`:661-664`）。
+- 取当前 `readerSession` 若是 `Ready`，用其 `workId`/`progress`/`timeMs`/`durationMs` 做最后一次 `updateProgress`。
+- **关键约束**：`onCleared` 时 `viewModelScope` 已取消，不能用 `viewModelScope.launch`。用 `runBlocking` 同步落盘（Android ViewModel 落盘标准做法，onCleared 窗口短）。失败静默。
+
+#### 测试清单（复刻 KmdReaderViewModelTest + ManualRuntimeBridge 模式）
+
+1. `openReaderAutoCreatesLibraryEntryOnShelfFalse`：open work → open reader → assert repo 含 `entry(workId, onShelf=false)`。
+2. `readyRestoresSavedSeekProgress`：预置 entry(progress=0.42, durationMs=D) → open reader → emit `Ready(durationMs=D)` → assert `runtimeBridge.seekCalls` 含 0.42f。
+3. `readyDoesNotRestoreSeekWhenDurationMismatched`：entry(progress=0.42, duration=D) → emit `Ready(durationMs=D*2)` → assert `seekCalls` 为空。
+4. `progressChangedThrottledWrites`：进 Ready → 连发多个 ProgressChanged（间隔 <5s）→ assert 写 1 次；`nowMillis` 推进 ≥5s 再发一个 → assert 写第 2 次。
+5. `progressChangedPersistsProgressFields`：节流写入后 assert entry 的 readingProgress/readingTimeMs/readingDurationMs 与事件一致。
+6. `onClearedFlushesLatestProgress`：进 Ready + 发 ProgressChanged（未到节流窗口）→ `onCleared()` → assert entry 含最新 progress（兜底落盘生效）。
+
+#### 审阅修复（PR #5 review，2026-06-21）
+
+R3-B 首版落 PR #5 后审阅发现 1 High + 2 Medium 数据完整性风险 + 1 Open Question，全部修复：
+
+- **F1（High）迟到事件 workId 门控**：WebView 单例复用，切 work 后旧 work 的迟到 `Ready`/`ProgressChanged` 仍能到达。原代码无条件用 `event.workId` 重建 session + 写 Room → 数据腐败。修复：以 `deskStack.currentWorkId` 为基准门控（OpenWork 立即更新它，比 readerSession 更早反映切换）。`sessionId` 不可用（每个 WebView 进程固定一次，跨 work swap 不变）。
+- **F2（Medium）restore seek 后回写 state**：`Ready` 设 `progress=0f`，restore 只调 `bridge.seek` 不回写 state，restore 与 runtime echo `ProgressChanged` 之间若 `onCleared`，flush 写 `0f` 覆盖恢复点。修复：seek 成功后回写 `session.progress`。
+- **F3（Medium）节流计数器 per-work**：`lastProgressSavedAt` 原为 ViewModel 全局单值，work A 存盘后 5s 内开 work B，B 的首个进度事件被误中 A 的窗口而丢弃。修复：改为 `mutableMapOf<String, Long>()` by workId，map 不含 key 即首次（同时移除 `hasSavedProgress` 标志）。
+- **OQ（Open Question）duration 守卫严格化**：原代码"任一 null 就恢复"（宽松），与文档 `==` 措辞不符。决议：**严格——双方都非 null 且相等才恢复**（最保守，无可靠基准不恢复）。对齐代码注释与本节措辞。
+
+新增 6 个回归用例（`staleReadyEventDoesNotMutateSession...` / `staleProgressEventDoesNotPersist...` / `restoreSeekThenFlushBeforeProgressEcho...` / `throttleResetsAcrossWorks` / `readyDoesNotRestoreSeekWhenSavedDurationIsNull` / `readyDoesNotRestoreSeekWhenEventDurationIsNull`），KmdReaderViewModelTest 20 → 26 用例。
+
+#### 不做（范围外）
+
+- 自动保存进度开关 / DataStore reader_preferences（→ R3-I）。
+- 书架 UI / 历史列表（→ R3-F）、详情页"继续阅读"按钮态（→ R3-H）、issue 草稿本地缓冲（→ R3-C）。
 
 ### R3-C. issue 草稿本地缓冲
 - issue draft（写到一半的 message + suggestion）写入 local_drafts（type="issue"）
