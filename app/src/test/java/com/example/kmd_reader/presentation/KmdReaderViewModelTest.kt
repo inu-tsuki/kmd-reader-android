@@ -1161,6 +1161,103 @@ class KmdReaderViewModelTest {
         )
     }
 
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleRestoreDoesNotOverwriteDraftAfterWorkSwitch() = runTest {
+        // F1：work A 起草后切到 work B 起草，A 的迟到恢复结果不能覆盖 B 的草稿。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 预置 A 的旧草稿（恢复时会查到它）。
+        val preDraftA = IssueDraft(
+            id = "draft-A", workId = "glass-rail", revisionId = "rev-1",
+            message = "A的内容", severity = IssueSeverity.Warning
+        )
+        localLibrary.saveDraft(LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0))
+        // 预置 B 的旧草稿。
+        val preDraftB = IssueDraft(
+            id = "draft-B", workId = "rain-city", revisionId = "rev-2",
+            message = "B的内容", severity = IssueSeverity.Warning
+        )
+        localLibrary.saveDraft(LocalDraft("draft-B", "rain-city", LocalDraftTypes.ISSUE, preDraftB.toJson(), 0))
+
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        // work A Ready，起草 A（触发异步恢复 A 的草稿）。
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // 切到 work B Ready，起草 B（触发异步恢复 B 的草稿）。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // 当前草稿必须是 B 的（message="B的内容"），不能被 A 的迟到恢复覆盖。
+        val draft = viewModel.state.value.issueFocus.issueDraft
+        assertNotNull(draft)
+        assertEquals(
+            "stale A restore must not overwrite B's draft",
+            "rain-city",
+            draft!!.workId
+        )
+        assertEquals("B的内容", draft.message)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun openWorkFlushesPendingDraftBeforeReplacingIssueFocus() = runTest {
+        // F2（续）：用户在节流窗口内打完最后一字后直接 OpenWork 切到另一本作品，
+        // 最后一笔必须落盘（修复前 OpenWork 未纳入 trailing flush，会丢）。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // clock=0 首次存。
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("first edit"))
+        advanceUntilIdle()
+        assertEquals(
+            "first edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+
+        // clock=100 窗口内——跳过存盘。
+        clock = 100L
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("second edit"))
+        advanceUntilIdle()
+        assertEquals(
+            "windowed edit not yet saved",
+            "first edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+
+        // OpenWork 切到另一本——trailing flush 必须存最后一笔 "second edit"。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        advanceUntilIdle()
+        assertEquals(
+            "OpenWork must flush pending draft before replacing issue focus",
+            "second edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+    }
+
     /** 把 reader 推进到 Ready 态的共用设置（StartIssueDraft 需要 Ready session 采集锚点）。 */
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun TestScope.bringReaderToReady(

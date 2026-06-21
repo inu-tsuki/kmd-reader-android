@@ -412,6 +412,15 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - `restoredDraftSubmitDeletesCorrectRowNotOrphan` — 预置 draft-old，恢复后 submit，断言 draft-old 行被删（无孤儿）
 - `trailingFlushPersistsLastEditBeforeNavigation` — 窗口内打完最后一字 → SelectSourceLine → 断言最后一笔已落盘
 
+#### 审阅修复第二轮（PR #6 review round 2，2026-06-22）
+
+- **F1（Medium）异步恢复无 workId 守卫**：`startIssueDraftWithPersistence` 的 Room 查询返回后直接 dispatch `AssignIssueDraftId`/`UpdateIssueDraftFromPersisted`，不校验当前 issueDraft 是否还是当初那个 work。用户快速从 A 起草→切 B 起草，A 的迟到恢复会覆盖 B 的草稿。修复：发起时捕获 `requestedWorkId` 作为 request token，查询返回后校验 `_state.value.issueFocus.issueDraft?.workId == requestedWorkId`，不匹配则丢弃。
+- **F2（续）OpenWork 未纳入 trailing flush**：上一轮 F2 覆盖了 SelectSourceLine/ClearIssueFocus/SelectIssue，但遗漏了 OpenWork（reducer 重建 IssueFocusState 丢弃 draft）。修复：OpenWork 在 reduce 前调 `flushDraftSynchronously()`。至此所有清空/替换 draft 的 action 均已纳入 pre-flush guard。
+
+新增 2 个回归用例（KmdReaderViewModelTest 36 → 38）：
+- `staleRestoreDoesNotOverwriteDraftAfterWorkSwitch` — A 起草→切 B 起草，断言当前草稿是 B 的（A 迟到恢复被丢弃）
+- `openWorkFlushesPendingDraftBeforeReplacingIssueFocus` — 窗口内打完最后一字 → OpenWork，断言最后一笔已落盘
+
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器
 - SAF 文件选择

@@ -73,6 +73,8 @@ class KmdReaderViewModel(
         when (action) {
             KmdReaderAction.RefreshWorks -> refreshWorks()
             is KmdReaderAction.OpenWork -> {
+                // F2（续）：OpenWork 会重建 IssueFocusState 丢弃当前 draft，需先 trailing flush。
+                flushDraftSynchronously()
                 reduce(action)
                 loadIssues(action.workId)
             }
@@ -560,11 +562,17 @@ class KmdReaderViewModel(
     private fun startIssueDraftWithPersistence() {
         reduce(KmdReaderAction.StartIssueDraftFromPlayback)
         val draft = _state.value.issueFocus.issueDraft ?: return
-        // 查库恢复。先不急着生成新 id——若存在持久化草稿，复用其 id 作为当前 IssueDraft.id，
-        // 使后续 submit/cancel 能精确删除那一行（而非留成孤儿）。
+        // 捕获发起时的 workId 作为 request token。异步恢复返回时校验当前 issueDraft 仍是
+        // 这个 work（用户可能已切到别的 work 起草），是则丢弃迟到结果，防覆盖 B 的草稿。
+        val requestedWorkId = draft.workId
         viewModelScope.launch {
             runCatching {
-                val persisted = localLibrary.getDraftsByType(draft.workId, LocalDraftTypes.ISSUE)
+                val persisted = localLibrary.getDraftsByType(requestedWorkId, LocalDraftTypes.ISSUE)
+                // F1 修复：Room 查询返回时校验当前 draft 仍属于发起时的 work。
+                val current = _state.value.issueFocus.issueDraft
+                if (current == null || current.workId != requestedWorkId) {
+                    return@runCatching
+                }
                 if (persisted.isEmpty()) {
                     // 无持久化草稿——生成新 id。
                     reduce(KmdReaderAction.AssignIssueDraftId("draft-${UUID.randomUUID()}"))
