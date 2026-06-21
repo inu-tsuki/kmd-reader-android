@@ -360,9 +360,48 @@ R3-B 首版落 PR #5 后审阅发现 1 High + 2 Medium 数据完整性风险 + 1
 - 书架 UI / 历史列表（→ R3-F）、详情页"继续阅读"按钮态（→ R3-H）、issue 草稿本地缓冲（→ R3-C）。
 
 ### R3-C. issue 草稿本地缓冲
-- issue draft（写到一半的 message + suggestion）写入 local_drafts（type="issue"）
-- 进入阅读时从 local_drafts 恢复未提交的 issue 草稿
-- close/reopen 不本地持久化（归 R4 云端 action log）
+
+issue draft（写到一半的 message + suggestion + 锚点信息）写入 `local_drafts`（type=`"issue"`），用户编辑到一半退出不丢。close/reopen 不本地持久化（归 R4 云端 action log）。
+
+#### 范围确认
+- **做**：草稿自动保存（debounce）、StartIssueDraft 时恢复未提交草稿、提交/取消后删除草稿。
+- **不做**：close/reopen 的本地持久化（→ R4 云端 action log）；discussion/review 草稿（→ R4，复用 `local_drafts` 表 + 不同 type）。
+
+#### 落地现状
+数据层（`LocalDraftEntity` + FK CASCADE、`LocalDraftDao`、DB v3 migration、Repository 接口 + Room/InMemory 双实现）由 R3-A 交付，无需 schema 变更。本节只做 ViewModel 接线 + 序列化。
+
+#### 实施步骤
+
+**步骤1. 序列化**
+- `IssueDraft` / `PlaybackAnchor` / `KmdSourceRange` / `IssueSeverity` 加 `@Serializable`（kotlinx.serialization，插件已在 app 模块）。
+- `IssueDraft` 新增 `id: String` 字段（持久化主键 `"draft-{uuid}"`，默认 `""`）。
+- `IssueDraft.toJson()` / `issueDraftFromJson(payload)` 编解码，`Json { ignoreUnknownKeys = true }` 容忍未来字段。
+
+**步骤2. debounce 自动保存（时钟比较，镜像 R3-B 进度节流）**
+- `lastDraftSavedAt: Map<draftId, Long>` + `DRAFT_SAVE_INTERVAL_MS = 1_000L`。
+- `onAction` 拦截 `UpdateIssueDraftMessage/Suggestion` → reduce → `scheduleDraftSave()`（窗口内跳过，窗口边界处写入）。
+- `onCleared` 兜底：`flushDraftOnCleared()` 用 `runBlocking` 强存一次当前草稿（防"最后一字不按键就退出"丢失）。
+- **不用 delay/Job/debounce**——与现有 ViewModel 时钟节流模式一致，在 `UnconfinedTestDispatcher` 下可测。
+
+**步骤3. StartIssueDraft 时恢复**
+- `onAction` 拦截 `StartIssueDraftFromPlayback` → `startIssueDraftWithPersistence()`：先 reduce 建骨架 → 生成 UUID id（`AssignIssueDraftId`）→ 查 `getDraftsByType(workId, "issue")` → 有则 `UpdateIssueDraftFromPersisted` 恢复。
+- **恢复语义**：恢复 message + suggestion + severity；**不恢复** sourceRange/playbackAnchor（每次重新采集锚点更安全）。
+- 两个内部 action（`AssignIssueDraftId` / `UpdateIssueDraftFromPersisted`）保持 reducer 纯函数——UUID 生成和 Room IO 都在 VM 侧。
+
+**步骤4. 提交/取消后删除**
+- `submitIssueDraft()` 开头调 `deleteCurrentDraftIfAny()`（已转为 issue，不再需要缓冲）。
+- `onAction` 拦截 `CancelIssueDraft` → `deleteCurrentDraftIfAny()` → reduce。
+
+**步骤5. 类型常量**
+- `LocalDraftTypes` object（`ISSUE` / `DISCUSSION` / `REVIEW`），避免裸字符串散落。
+
+#### 测试清单（KmdReaderViewModelTest +6，28 → 34）
+- `updateIssueDraftMessageDebouncesWrites` — clock=0 存，clock=100 跳过，clock=1001 存
+- `startIssueDraftRestoresPersistedMessage` — 预置草稿，StartIssueDraft 后恢复 message/suggestion/severity
+- `startIssueDraftWithNoPersistedDraftUsesDefaults` — 无持久化草稿用 reducer 默认值
+- `submitIssueDraftDeletesPersistedDraft` — 提交后 local_drafts 为空
+- `cancelIssueDraftDeletesPersistedDraft` — 取消后 local_drafts 为空
+- `draftSerializeRoundTripPreservesFields` — IssueDraft ↔ JSON 字段无损
 
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器

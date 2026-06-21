@@ -41,6 +41,14 @@ sealed interface KmdReaderAction {
     data object StartIssueDraftFromPlayback : KmdReaderAction
     data class UpdateIssueDraftMessage(val message: String) : KmdReaderAction
     data class UpdateIssueDraftSuggestion(val suggestion: String) : KmdReaderAction
+    /** R3-C 内部 action：VM 生成 draft id 后回填 issueDraft.id（保持 reducer 纯函数）。 */
+    data class AssignIssueDraftId(val id: String) : KmdReaderAction
+    /** R3-C 内部 action：从 local_drafts 恢复草稿时，把持久化的 message/suggestion/severity 写回。 */
+    data class UpdateIssueDraftFromPersisted(
+        val message: String,
+        val suggestion: String,
+        val severity: com.example.kmd_reader.domain.model.IssueSeverity
+    ) : KmdReaderAction
     data object SubmitIssueDraft : KmdReaderAction
     data object CancelIssueDraft : KmdReaderAction
     data class CloseIssue(val issueId: String, val reason: String = "fixed") : KmdReaderAction

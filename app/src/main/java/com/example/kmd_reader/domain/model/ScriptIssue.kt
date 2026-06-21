@@ -1,5 +1,8 @@
 package com.example.kmd_reader.domain.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class ScriptIssue(
     val id: String,
     val workId: String,
@@ -10,6 +13,7 @@ data class ScriptIssue(
     val suggestion: String
 )
 
+@Serializable
 enum class IssueSeverity(val label: String) {
     Info("提示"),
     Warning("警告"),

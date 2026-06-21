@@ -52,6 +52,13 @@ data class LocalDraft(
     val updatedAt: Long
 )
 
+/** 草稿类型常量，避免裸字符串散落。R3-C 消费 ISSUE；R4 消费 DISCUSSION/REVIEW。 */
+object LocalDraftTypes {
+    const val ISSUE = "issue"
+    const val DISCUSSION = "discussion"
+    const val REVIEW = "review"
+}
+
 interface LocalLibraryRepository {
     // 作品级
     suspend fun getEntry(workId: String): LocalLibraryEntry?
