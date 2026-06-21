@@ -102,6 +102,15 @@ class KmdReaderViewModel(
                 deleteCurrentDraftIfAny()
                 reduce(action)
             }
+            // F2 修复：这些 action 会清空/替换 issueDraft（reducer 里 issueDraft = null）。
+            // leading-edge throttle 不会安排 trailing save，故在此同步 flush 最后一笔，
+            // 防用户在节流窗口内打完最后一字后切走导致丢失。
+            is KmdReaderAction.SelectSourceLine,
+            KmdReaderAction.ClearIssueFocus,
+            is KmdReaderAction.SelectIssue -> {
+                flushDraftSynchronously()
+                reduce(action)
+            }
             is KmdReaderAction.JumpIssueToPlayback -> jumpIssueToPlayback(action.issueId)
             KmdReaderAction.JumpSelectedSourceLineToPlayback -> jumpSelectedSourceLineToPlayback()
             KmdReaderAction.RetryReaderRuntime -> retryReaderRuntime()
@@ -551,24 +560,30 @@ class KmdReaderViewModel(
     private fun startIssueDraftWithPersistence() {
         reduce(KmdReaderAction.StartIssueDraftFromPlayback)
         val draft = _state.value.issueFocus.issueDraft ?: return
-        // 生成持久化 id（"draft-{uuid}"，遵循 plan 文档）并回填。
-        val draftId = "draft-${UUID.randomUUID()}"
-        reduce(KmdReaderAction.AssignIssueDraftId(draftId))
-        // 恢复：查 local_drafts 是否有该 work 的未提交 issue 草稿。
+        // 查库恢复。先不急着生成新 id——若存在持久化草稿，复用其 id 作为当前 IssueDraft.id，
+        // 使后续 submit/cancel 能精确删除那一行（而非留成孤儿）。
         viewModelScope.launch {
             runCatching {
                 val persisted = localLibrary.getDraftsByType(draft.workId, LocalDraftTypes.ISSUE)
-                val restored = persisted.firstOrNull() ?: return@runCatching
+                if (persisted.isEmpty()) {
+                    // 无持久化草稿——生成新 id。
+                    reduce(KmdReaderAction.AssignIssueDraftId("draft-${UUID.randomUUID()}"))
+                    return@runCatching
+                }
+                val restored = persisted.first()
+                // 复用持久化草稿的 id，使后续 deleteCurrentDraftIfAny 能删对行。
+                reduce(KmdReaderAction.AssignIssueDraftId(restored.id))
                 val restoredDraft = runCatching { issueDraftFromJson(restored.payload) }.getOrNull()
-                    ?: return@runCatching
-                // 恢复文本字段 + severity，不恢复锚点（每次重新采集更安全）。
-                reduce(
-                    KmdReaderAction.UpdateIssueDraftFromPersisted(
-                        message = restoredDraft.message,
-                        suggestion = restoredDraft.suggestion,
-                        severity = restoredDraft.severity
+                if (restoredDraft != null) {
+                    // 恢复文本字段 + severity，不恢复锚点（每次重新采集更安全）。
+                    reduce(
+                        KmdReaderAction.UpdateIssueDraftFromPersisted(
+                            message = restoredDraft.message,
+                            suggestion = restoredDraft.suggestion,
+                            severity = restoredDraft.severity
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -628,6 +643,31 @@ class KmdReaderViewModel(
                         type = LocalDraftTypes.ISSUE,
                         payload = draft.toJson(),
                         updatedAt = nowMillis()
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * F2 修复：导航型 action（SelectSourceLine/ClearIssueFocus/SelectIssue）清空/替换
+     * issueDraft 前的 trailing flush。忽略节流窗口立即存——这些 action 是草稿结束的信号。
+     * viewModelScope 仍活着，用 launch 异步存（与 scheduleDraftSave 同）。
+     */
+    private fun flushDraftSynchronously() {
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        if (draft.id.isBlank()) return
+        val now = nowMillis()
+        lastDraftSavedAt[draft.id] = now
+        viewModelScope.launch {
+            runCatching {
+                localLibrary.saveDraft(
+                    LocalDraft(
+                        id = draft.id,
+                        workId = draft.workId,
+                        type = LocalDraftTypes.ISSUE,
+                        payload = draft.toJson(),
+                        updatedAt = now
                     )
                 )
             }

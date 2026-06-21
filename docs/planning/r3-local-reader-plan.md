@@ -403,6 +403,15 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - `cancelIssueDraftDeletesPersistedDraft` — 取消后 local_drafts 为空
 - `draftSerializeRoundTripPreservesFields` — IssueDraft ↔ JSON 字段无损
 
+#### 审阅修复（PR #6 review，2026-06-21）
+
+- **F1（High）恢复草稿 id 错配**：`startIssueDraftWithPersistence` 原总是先生成新 UUID 再恢复，但恢复 action 只带 message/suggestion/severity 不带 persisted id → submit/cancel 删的是新 UUID，旧 `draft-old` 留为孤儿 → 下次又恢复。修复：查库先判断——有持久化草稿则复用其 `LocalDraft.id`（`AssignIssueDraftId(restored.id)`），无则才生成新 UUID。
+- **F2（Medium）trailing flush 缺失**：`scheduleDraftSave` 是 leading-edge throttle（首次即写、窗口内跳过），不安排 trailing save。用户在窗口内打完最后一字后若切走（SelectSourceLine/ClearIssueFocus/SelectIssue），最后一笔丢失。修复：这些清空/替换 issueDraft 的导航型 action 前调 `flushDraftSynchronously()`（忽略窗口立即存）。onCleared 仍作最终兜底。
+
+新增 2 个回归用例（KmdReaderViewModelTest 34 → 36）：
+- `restoredDraftSubmitDeletesCorrectRowNotOrphan` — 预置 draft-old，恢复后 submit，断言 draft-old 行被删（无孤儿）
+- `trailingFlushPersistsLastEditBeforeNavigation` — 窗口内打完最后一字 → SelectSourceLine → 断言最后一笔已落盘
+
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器
 - SAF 文件选择
