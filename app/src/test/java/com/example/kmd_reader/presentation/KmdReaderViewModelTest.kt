@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -773,6 +774,109 @@ class KmdReaderViewModelTest {
         assertTrue(
             "must not restore seek when event duration is null (no reliable baseline)",
             runtimeBridge.seekCalls.isEmpty()
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun stalePlaybackStateChangedDoesNotFlushZeroOverSavedProgress() = runTest {
+        // 复核 Remaining Finding：切到 B 后，A 迟到的 PlaybackStateChanged 不能把 session
+        // 改回 A（progress 退成 0f），否则随后 onCleared 会用 0f 覆盖 A 的真实进度。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        // work A Ready，落一笔进度 0.5。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.5f, timeMs = 1200, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(0.5f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
+
+        // 切到 work B。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+
+        // 迟到的 A.PlaybackStateChanged 到达——必须被门控拦截，不能改 session。
+        runtimeBridge.emit(
+            ReaderRuntimeEvent.PlaybackStateChanged(workId = "glass-rail", isPlaying = true, state = "playing")
+        )
+        advanceUntilIdle()
+
+        val session = viewModel.state.value.readerSession
+        assertTrue(
+            "stale A.PlaybackStateChanged must not flip session to A; got $session",
+            session !is ReaderSessionState.Ready || session.workId == "rain-city"
+        )
+
+        // onCleared 兜底落盘：A 的进度绝不能被写成 0f。
+        viewModel.flushProgressOnCleared()
+        assertEquals(
+            "flush must not overwrite A's progress with 0f from a stale playback event",
+            0.5f,
+            localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f,
+            0.001f
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleFailedEventDoesNotOverwriteCurrentSession() = runTest {
+        // 复核 Remaining Finding：切到 B 后，A 迟到的 Failed 不能把当前 B 的 session
+        // 切成 Failed(A)，否则 B 的最后一笔进度无法经 onCleared 兜底落盘。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        // work A Ready。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        // 切到 work B，B Ready 并播放到 0.6。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+        runtimeBridge.emit(progressEvent("rain-city", progress = 0.6f, timeMs = 1800, durationMs = 3000))
+        advanceUntilIdle()
+
+        // 迟到的 A.Failed 到达——必须被门控拦截，不能把 B 的 session 切成 Failed(A)。
+        runtimeBridge.emit(
+            ReaderRuntimeEvent.Failed(workId = "glass-rail", message = "stale failure", recoverable = false)
+        )
+        advanceUntilIdle()
+
+        val session = viewModel.state.value.readerSession
+        assertFalse(
+            "stale A.Failed must not overwrite current B session; got $session",
+            session is ReaderSessionState.Failed && session.workId == "glass-rail"
+        )
+        // B 的 session 应仍是 Ready，使 onCleared 能兜底落盘 0.6。
+        assertTrue("B session must remain Ready for flush", session is ReaderSessionState.Ready)
+        viewModel.flushProgressOnCleared()
+        assertEquals(
+            "B's latest progress must still flush after a stale A failure",
+            0.6f,
+            localLibrary.getEntry("rain-city")?.readingProgress ?: -1f,
+            0.001f
         )
     }
 

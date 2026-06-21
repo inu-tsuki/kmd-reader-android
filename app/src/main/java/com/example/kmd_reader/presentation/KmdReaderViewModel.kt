@@ -338,6 +338,12 @@ class KmdReaderViewModel(
                 if (currentSession.isFailedFor(event.workId)) {
                     return
                 }
+                // F1（续）：PlaybackStateChanged 同样需 deskStack 门控。迟到的 A 事件在
+                // 切到 B 后会把 session 改回 A 且 progress 退成 0f（readySession.takeIf 失败
+                // → null → 0f）；随后 onCleared flush 会用 0f 覆盖 A 的真实进度。
+                if (event.workId != _state.value.deskStack.currentWorkId) {
+                    return
+                }
                 if (event.state == "loading") {
                     _state.update {
                         it.copy(
@@ -390,11 +396,20 @@ class KmdReaderViewModel(
                 }
             }
             is ReaderRuntimeEvent.Failed -> {
+                // F1（续）：Failed 门控。迟到的 A 失败事件会把当前 B 的 session 切成
+                // Failed(A)，导致 B 的最后一笔进度无法经 onCleared 兜底落盘。
+                // event.workId 非空且不等于 deskStack 当前 → 明确属于旧 work，丢弃。
+                // event.workId 为 null 时无法判定归属：保留原 fallback（归咎当前 session），
+                // 保证无归属信息的失败仍对用户可见，不因防迟到而吞掉错误。
+                val resolvedWorkId = event.workId
+                if (resolvedWorkId != null && resolvedWorkId != _state.value.deskStack.currentWorkId) {
+                    return
+                }
                 _state.update {
                     val currentSession = it.readerSession
                     it.copy(
                         readerSession = ReaderSessionState.Failed(
-                            workId = event.workId ?: it.deskStack.currentWorkId.orEmpty(),
+                            workId = resolvedWorkId ?: it.deskStack.currentWorkId.orEmpty(),
                             message = event.message,
                             phase = currentSession.phaseOrNull()
                                 ?: ReaderSessionPhase.WorkLoading,
