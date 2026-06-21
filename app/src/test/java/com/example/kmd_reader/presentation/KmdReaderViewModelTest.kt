@@ -2,6 +2,8 @@ package com.example.kmd_reader.presentation
 
 import com.example.kmd_reader.data.WorkRepository
 import com.example.kmd_reader.data.mock.MockKmdSources
+import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
@@ -368,6 +370,224 @@ class KmdReaderViewModelTest {
         assertEquals(9, viewModel.state.value.issueFocus.selectedSourceLine)
         assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
     }
+
+    // ── R3-B 进度持久化 ──
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun openReaderAutoCreatesLibraryEntryOnShelfFalse() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = ManualRuntimeBridge(),
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+
+        val entry = localLibrary.getEntry("glass-rail")
+        assertEquals("glass-rail", entry?.workId)
+        assertEquals(false, entry?.onShelf)
+        assertEquals(0f, entry?.readingProgress ?: -1f, 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyRestoresSavedSeekProgress() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(
+            ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400)
+        )
+        advanceUntilIdle()
+
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyDoesNotRestoreSeekWhenDurationMismatched() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 持久化 duration=2400，但本次 Ready 上报 4800（换源/修订）→ 不恢复
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(
+            ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 4800)
+        )
+        advanceUntilIdle()
+
+        assertTrue("duration mismatch must skip restore seek", runtimeBridge.seekCalls.isEmpty())
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun progressChangedThrottledWrites() = runTest {
+        // 可控时钟：每次调用自增，模拟时间推进。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        // 首个 ProgressChanged（clock=0）应触发首次落盘（0 - 0 >= 0）。
+        clock = 0L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.1f, timeMs = 240, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(0.1f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
+
+        // 间隔不足 5s 的后续事件应被节流，进度不更新。
+        clock = 3_000L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.2f, timeMs = 480, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(
+            "throttled: progress must not be overwritten within interval",
+            0.1f,
+            localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f,
+            0.001f
+        )
+
+        // 推进 ≥5s 后的事件应写入。
+        clock = 5_001L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.3f, timeMs = 720, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(0.3f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun progressChangedPersistsProgressFields() = runTest {
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.5f, timeMs = 1200, durationMs = 2400))
+        advanceUntilIdle()
+
+        val entry = localLibrary.getEntry("glass-rail")
+        assertEquals(0.5f, entry?.readingProgress ?: -1f, 0.001f)
+        assertEquals(1200L, entry?.readingTimeMs)
+        assertEquals(2400L, entry?.readingDurationMs)
+        assertEquals(0L, entry?.lastReadAt)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun onClearedFlushesLatestProgress() = runTest {
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+        // 首个事件触发首次落盘后，节流窗口内的后续事件不应落盘……
+        clock = 1_000L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.9f, timeMs = 2160, durationMs = 2400))
+        advanceUntilIdle()
+        // ……但 onCleared 必须兜底写入最新进度。
+        // 直接调 flushProgressOnCleared（onCleared 是 protected，测试不可见；
+        // 抽出的 internal 方法承载兜底落盘逻辑，onCleared 也调它）。
+        clock = 2_000L
+        viewModel.flushProgressOnCleared()
+
+        val entry = localLibrary.getEntry("glass-rail")
+        assertEquals(
+            "onCleared must flush the latest progress regardless of throttle window",
+            0.9f,
+            entry?.readingProgress ?: -1f,
+            0.001f
+        )
+        assertEquals(2_000L, entry?.lastReadAt)
+    }
+
+    private fun progressEntry(
+        workId: String,
+        progress: Float,
+        durationMs: Long
+    ): LocalLibraryEntry {
+        val work = MockWorks.works.first { it.id == workId }
+        return LocalLibraryEntry(
+            workId = workId,
+            source = work.sourceType,
+            onShelf = false,
+            title = work.title,
+            authorName = work.authorName,
+            presentationMode = work.presentation.mode,
+            aspectRatio = work.presentation.aspectRatio,
+            kmdSource = null,
+            contentUri = work.contentUri,
+            readingProgress = progress,
+            readingTimeMs = null,
+            readingDurationMs = durationMs,
+            lastReadAt = null,
+            importedAt = null,
+            cachedAt = null
+        )
+    }
+
+    private fun progressEvent(
+        workId: String,
+        progress: Float,
+        timeMs: Long,
+        durationMs: Long
+    ): ReaderRuntimeEvent.ProgressChanged = ReaderRuntimeEvent.ProgressChanged(
+        workId = workId,
+        progress = progress,
+        positionPayload = "line:0",
+        timeMs = timeMs,
+        durationMs = durationMs
+    )
 }
 
 private class FakeWorkRepository : WorkRepository {

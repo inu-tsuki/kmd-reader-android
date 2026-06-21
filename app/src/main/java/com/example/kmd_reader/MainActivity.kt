@@ -18,7 +18,8 @@ class MainActivity : ComponentActivity() {
     private val readerViewModel: KmdReaderViewModel by viewModels {
         KmdReaderViewModel.Factory(
             repository = appContainer.workRepository,
-            runtimeBridge = appContainer.readerRuntimeBridge
+            runtimeBridge = appContainer.readerRuntimeBridge,
+            localLibrary = appContainer.localLibraryRepository
         )
     }
 

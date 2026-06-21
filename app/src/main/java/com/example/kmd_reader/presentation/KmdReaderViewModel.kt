@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.kmd_reader.data.MockWorkRepository
 import com.example.kmd_reader.data.WorkRepository
+import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalLibraryEntry
+import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.domain.kmd.KmdSourceMetadataParser
 import com.example.kmd_reader.domain.model.IssueSource
 import com.example.kmd_reader.domain.model.KmdSourceSnapshot
@@ -24,11 +27,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class KmdReaderViewModel(
     private val repository: WorkRepository = MockWorkRepository(),
     private val runtimeBridge: ReaderRuntimeBridge = FakeReaderRuntimeBridge(),
-    private val nowMillis: () -> Long = System::currentTimeMillis
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val localLibrary: LocalLibraryRepository = InMemoryLocalLibraryRepository()
 ) : ViewModel() {
     val runtimeBridgeForHost: ReaderRuntimeBridge
         get() = runtimeBridge
@@ -38,6 +43,18 @@ class KmdReaderViewModel(
 
     private val effects = Channel<KmdReaderEffect>(capacity = Channel.BUFFERED)
     val effectFlow = effects.receiveAsFlow()
+
+    // 进度持久化：上次落盘时间戳（与 nowMillis 同一时钟）。播放中按 PROGRESS_SAVE_INTERVAL_MS
+    // 节流写库，onCleared 再兜底落一次。
+    // 注意：不能用 lastProgressSavedAt == 0L 判定"是否落过盘"——测试时钟可始于 0，
+    // 首次 now=0 会把它写回 0L，使后续每次都误判为首次而绕过节流。用独立标志。
+    private var lastProgressSavedAt: Long = 0L
+    private var hasSavedProgress: Boolean = false
+
+    companion object {
+        // 播放期间进度落盘节流间隔。单本 20min 作品写 ~240 次，断电最多丢 5s 进度。
+        private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
+    }
 
     init {
         observeRuntimeEvents()
@@ -143,6 +160,12 @@ class KmdReaderViewModel(
             runCatching {
                 val source = repository.getWorkSource(workId = work.id)
                     ?: error("当前作品还没有可播放的 KMD 源文本。")
+                // R3-B 步骤2：首次阅读自动建 entry（onShelf=false）。
+                // updateProgress 在 entry 不存在时是空操作，所以必须先于任何进度写入建 entry。
+                // 走 get-then-insert，不盲目 upsert，避免覆盖已有进度/时间字段。
+                if (localLibrary.getEntry(work.id) == null) {
+                    localLibrary.upsertEntry(work.toLocalLibraryEntry())
+                }
                 val sourceSnapshot = KmdSourceSnapshot.fromSource(
                     workId = work.id,
                     revisionId = work.script.activeRevisionId,
@@ -248,6 +271,10 @@ class KmdReaderViewModel(
                         readerChrome = it.readerChrome.show(mode = ReaderChromeMode.Reading)
                     )
                 }
+                // R3-B 步骤3：Ready 后按持久化进度恢复 seek。
+                // 此时 session 已是 Ready，满足 seek 时序。直接调 bridge.seek 而非 onAction，
+                // 避免重复 reduce。失败静默（不影响播放）。
+                restoreSeekOnReady(event.workId, event.durationMs)
             }
             is ReaderRuntimeEvent.ProgressChanged -> {
                 val currentSession = _state.value.readerSession
@@ -280,6 +307,13 @@ class KmdReaderViewModel(
                         )
                     )
                 }
+                // R3-B 步骤4：进度节流落盘。
+                persistProgressIfNeeded(
+                    workId = event.workId,
+                    progress = event.progress,
+                    timeMs = event.timeMs ?: readySession?.timeMs,
+                    durationMs = event.durationMs ?: readySession?.durationMs
+                )
             }
             is ReaderRuntimeEvent.PlaybackStateChanged -> {
                 val currentSession = _state.value.readerSession
@@ -399,6 +433,46 @@ class KmdReaderViewModel(
                 runtimeBridge.seek(progress)
             }.onFailure {
                 sendEffect(KmdReaderEffect.ShowMessage("进度跳转失败"))
+            }
+        }
+    }
+
+    // R3-B 步骤3：Ready 后从本地库读进度并 seek。
+    // 守卫：progress ∈ (0,1) 且持久化的 readingDurationMs 与当前 event.durationMs 一致。
+    // duration 不匹配（换源/修订）则不恢复，防"旧进度 + 新 duration = 跳到错位置"。
+    private fun restoreSeekOnReady(workId: String, durationMs: Long?) {
+        viewModelScope.launch {
+            runCatching {
+                val entry = localLibrary.getEntry(workId) ?: return@launch
+                val progress = entry.readingProgress
+                if (progress <= 0f || progress >= 1f) return@launch
+                val savedDuration = entry.readingDurationMs
+                if (savedDuration != null && durationMs != null && savedDuration != durationMs) {
+                    return@launch
+                }
+                runtimeBridge.seek(progress)
+            }
+        }
+    }
+
+    // R3-B 步骤4：ProgressChanged 节流写库。距上次落盘不足 PROGRESS_SAVE_INTERVAL_MS 则跳过。
+    // 失败静默（不阻断播放、不弹消息）。
+    private fun persistProgressIfNeeded(
+        workId: String,
+        progress: Float,
+        timeMs: Long?,
+        durationMs: Long?
+    ) {
+        val now = nowMillis()
+        // 首次落盘（hasSavedProgress=false）无脑写一笔，之后按 PROGRESS_SAVE_INTERVAL_MS 节流。
+        if (hasSavedProgress && now - lastProgressSavedAt < PROGRESS_SAVE_INTERVAL_MS) {
+            return
+        }
+        lastProgressSavedAt = now
+        hasSavedProgress = true
+        viewModelScope.launch {
+            runCatching {
+                localLibrary.updateProgress(workId, progress, timeMs, durationMs, now)
             }
         }
     }
@@ -659,18 +733,42 @@ class KmdReaderViewModel(
     }
 
     override fun onCleared() {
+        // R3-B 步骤5：兜底落盘。viewModelScope 此时已取消，用 runBlocking 同步写最后一次进度。
+        // 这是 Android ViewModel 落盘的标准做法；单次 Room 写 WAL 下 <1ms，窗口可接受。
+        flushProgressOnCleared()
         runtimeBridge.dispose()
         super.onCleared()
     }
 
+    /**
+     * R3-B 步骤5：onCleared 兜底落盘。抽出为 internal 以便单元测试直接驱动
+     * （onCleared 是 protected，测试无法调用）。生产代码只在 onCleared 调用。
+     */
+    internal fun flushProgressOnCleared() {
+        runCatching {
+            runBlocking {
+                val session = _state.value.readerSession as? ReaderSessionState.Ready
+                    ?: return@runBlocking
+                localLibrary.updateProgress(
+                    workId = session.workId,
+                    progress = session.progress,
+                    timeMs = session.timeMs,
+                    durationMs = session.durationMs,
+                    now = nowMillis()
+                )
+            }
+        }
+    }
+
     class Factory(
         private val repository: WorkRepository,
-        private val runtimeBridge: ReaderRuntimeBridge
+        private val runtimeBridge: ReaderRuntimeBridge,
+        private val localLibrary: LocalLibraryRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(KmdReaderViewModel::class.java)) {
-                return KmdReaderViewModel(repository, runtimeBridge) as T
+                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
@@ -823,4 +921,25 @@ class KmdReaderViewModel(
 
     private fun ReaderSessionState.isFailedFor(workId: String): Boolean =
         this is ReaderSessionState.Failed && this.workId == workId
+
+    // R3-B 步骤2：Work → LocalLibraryEntry。首次阅读时建条目，进度=0、不上架，
+    // 时间字段留空（进度由 ProgressChanged/onCleared 写入）。
+    private fun com.example.kmd_reader.domain.model.Work.toLocalLibraryEntry(): LocalLibraryEntry =
+        LocalLibraryEntry(
+            workId = id,
+            source = sourceType,
+            onShelf = false,
+            title = title,
+            authorName = authorName,
+            presentationMode = presentation.mode,
+            aspectRatio = presentation.aspectRatio,
+            kmdSource = null,
+            contentUri = contentUri,
+            readingProgress = 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = null,
+            importedAt = null,
+            cachedAt = null
+        )
 }
