@@ -421,6 +421,14 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - `staleRestoreDoesNotOverwriteDraftAfterWorkSwitch` — A 起草→切 B 起草，断言当前草稿是 B 的（A 迟到恢复被丢弃）
 - `openWorkFlushesPendingDraftBeforeReplacingIssueFocus` — 窗口内打完最后一字 → OpenWork，断言最后一笔已落盘
 
+#### 审阅修复第二轮补强（PR #6 review round 2 residual，2026-06-22）
+
+非阻塞测试覆盖瑕疵（reviewer 指出，不作为合并门槛）：`staleRestoreDoesNotOverwriteDraftAfterWorkSwitch` 原版在 A 起草后立刻 `advanceUntilIdle()`，A 的恢复在 B 起草前已提前完成，并未真正制造“迟到 A 覆盖 B”的竞态窗口——生产代码的 `requestedWorkId` guard 正确但此用例证明力不足。
+
+修复：引入 `ControllableLocalLibraryRepository`（可挂起 fake），用 `CompletableDeferred` 精确卡住 A 的第一次 `getDraftsByType`，B 起草完成后再释放 gate，真正复现迟到路径。**经验证**：临时注释掉 guard 后此用例必须失败（race window 被打开），恢复 guard 后通过——证明其回归价值成立。
+
+> 注意：fake 不能用 `Mutex`/`synchronized` 包裹 `gate.await()`——挂起时持锁会让 B 的查询一并阻塞，把竞态窗口塌缩掉。UnconfinedTestDispatcher 单线程且无抢占，普通 Boolean 标志位即可安全区分“第一次调用”。
+
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器
 - SAF 文件选择

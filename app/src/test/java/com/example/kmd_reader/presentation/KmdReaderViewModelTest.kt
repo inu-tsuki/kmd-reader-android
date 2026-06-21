@@ -6,6 +6,8 @@ import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
 import com.example.kmd_reader.data.repository.LocalDraft
 import com.example.kmd_reader.data.repository.LocalDraftTypes
 import com.example.kmd_reader.data.repository.LocalLibraryEntry
+import com.example.kmd_reader.data.repository.LocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalRevision
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.IssueSeverity
 import com.example.kmd_reader.domain.model.KmdSourceRange
@@ -21,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -1165,19 +1168,30 @@ class KmdReaderViewModelTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun staleRestoreDoesNotOverwriteDraftAfterWorkSwitch() = runTest {
         // F1：work A 起草后切到 work B 起草，A 的迟到恢复结果不能覆盖 B 的草稿。
-        val localLibrary = InMemoryLocalLibraryRepository()
-        // 预置 A 的旧草稿（恢复时会查到它）。
+        //
+        // 真正的竞态窗口：A 的 getDraftsByType 必须在 B 起草完成后才返回。
+        // 早期版本在 A 起草后立刻 advanceUntilIdle()，让 A 的恢复提前完成，并没有
+        // 制造“迟到 A 覆盖 B”的竞态——用 CompletableDeferred 卡住 A 的查询，
+        // 在 B 起草完成后再释放，精确复现迟到路径，验证 requestedWorkId guard。
+        val gateForA = CompletableDeferred<List<LocalDraft>>()
+        val localLibrary = ControllableLocalLibraryRepository(firstGetDraftsByTypeGate = gateForA)
+
+        // 预置 A 的旧草稿（A 查询释放后会返回它）。
         val preDraftA = IssueDraft(
             id = "draft-A", workId = "glass-rail", revisionId = "rev-1",
             message = "A的内容", severity = IssueSeverity.Warning
         )
-        localLibrary.saveDraft(LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0))
+        localLibrary.saveDraft(
+            LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0)
+        )
         // 预置 B 的旧草稿。
         val preDraftB = IssueDraft(
             id = "draft-B", workId = "rain-city", revisionId = "rev-2",
             message = "B的内容", severity = IssueSeverity.Warning
         )
-        localLibrary.saveDraft(LocalDraft("draft-B", "rain-city", LocalDraftTypes.ISSUE, preDraftB.toJson(), 0))
+        localLibrary.saveDraft(
+            LocalDraft("draft-B", "rain-city", LocalDraftTypes.ISSUE, preDraftB.toJson(), 0)
+        )
 
         val runtimeBridge = ManualRuntimeBridge()
         val viewModel = KmdReaderViewModel(
@@ -1186,18 +1200,28 @@ class KmdReaderViewModelTest {
             localLibrary = localLibrary
         )
 
-        // work A Ready，起草 A（触发异步恢复 A 的草稿）。
+        // work A Ready，起草 A（触发异步 getDraftsByType("glass-rail")，卡在 gate 上）。
         bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
         viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
         advanceUntilIdle()
+        // A 的恢复协程正挂在 gateForA.await()，没有完成。
 
-        // 切到 work B Ready，起草 B（触发异步恢复 B 的草稿）。
+        // 切到 work B Ready，起草 B（B 的查询走默认路径，立即完成并回填 B）。
         viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
         viewModel.onAction(KmdReaderAction.OpenReader)
         advanceUntilIdle()
         runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
         advanceUntilIdle()
         viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        // B 的恢复已完成，当前草稿是 B。
+
+        // 现在释放 A 的迟到查询——requestedWorkId guard 必须丢弃这笔回填。
+        gateForA.complete(
+            listOf(
+                LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0)
+            )
+        )
         advanceUntilIdle()
 
         // 当前草稿必须是 B 的（message="B的内容"），不能被 A 的迟到恢复覆盖。
@@ -1208,7 +1232,13 @@ class KmdReaderViewModelTest {
             "rain-city",
             draft!!.workId
         )
-        assertEquals("B的内容", draft.message)
+        assertEquals(
+            "B's restored message must survive late A restore",
+            "B的内容",
+            draft.message
+        )
+        // 关键回归点：B 的 id（draft-B）绝不能被 A 的迟到回填改成 draft-A。
+        assertEquals("draft-B", draft.id)
     }
 
     @Test
@@ -1332,6 +1362,54 @@ private class SourceMissingWorkRepository : WorkRepository {
 
     override suspend fun listIssues(workId: String, refresh: Boolean): List<ScriptIssue> =
         emptyList()
+}
+
+/**
+ * [LocalLibraryRepository] 的可挂起替身：第一次 [getDraftsByType] 调用挂起在
+ * [firstGetDraftsByTypeGate] 上，由测试控制何时（及返回什么）。
+ *
+ * 用于精确制造“迟到恢复”竞态窗口：A 的草稿恢复查询被卡住，等 B 起草完成后再释放，
+ * 以验证 [KmdReaderViewModel.startIssueDraftWithPersistence] 里的 requestedWorkId guard。
+ * 其余方法委派给内存实现，保持其它行为不变。
+ *
+ * 注意：不能用 [Mutex]/synchronized 包裹 gate.await()——挂起时仍持锁会让后续调用
+ * （B 的查询）一并阻塞，把竞态窗口塌缩掉。UnconfinedTestDispatcher 单线程且无抢占，
+ * 这里用普通 Boolean 标志位即可安全区分“第一次调用”。
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+private class ControllableLocalLibraryRepository(
+    private val firstGetDraftsByTypeGate: CompletableDeferred<List<LocalDraft>>
+) : LocalLibraryRepository {
+    private val delegate = InMemoryLocalLibraryRepository()
+    private var firstQuerySeen = false
+
+    override suspend fun getDraftsByType(workId: String, type: String): List<LocalDraft> {
+        if (!firstQuerySeen) {
+            firstQuerySeen = true
+            // 第一次查询挂起到 gate 完成——返回值由测试注入。
+            // 不在持锁状态下 await，否则后续 getDraftsByType 会被一起卡死。
+            return firstGetDraftsByTypeGate.await()
+        }
+        return delegate.getDraftsByType(workId, type)
+    }
+
+    override suspend fun getEntry(workId: String): LocalLibraryEntry? = delegate.getEntry(workId)
+    override suspend fun getShelf(): List<LocalLibraryEntry> = delegate.getShelf()
+    override suspend fun getHistory(): List<LocalLibraryEntry> = delegate.getHistory()
+    override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
+    override suspend fun updateProgress(
+        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long
+    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now)
+    override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
+        delegate.setOnShelf(workId, onShelf)
+    override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
+    override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
+        delegate.getActiveLocalRevision(workId)
+    override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
+    override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
+    override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
+    override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
 }
 
 private class ManualRuntimeBridge : ReaderRuntimeBridge {
