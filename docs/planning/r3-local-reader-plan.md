@@ -360,9 +360,74 @@ R3-B 首版落 PR #5 后审阅发现 1 High + 2 Medium 数据完整性风险 + 1
 - 书架 UI / 历史列表（→ R3-F）、详情页"继续阅读"按钮态（→ R3-H）、issue 草稿本地缓冲（→ R3-C）。
 
 ### R3-C. issue 草稿本地缓冲
-- issue draft（写到一半的 message + suggestion）写入 local_drafts（type="issue"）
-- 进入阅读时从 local_drafts 恢复未提交的 issue 草稿
-- close/reopen 不本地持久化（归 R4 云端 action log）
+
+issue draft（写到一半的 message + suggestion + 锚点信息）写入 `local_drafts`（type=`"issue"`），用户编辑到一半退出不丢。close/reopen 不本地持久化（归 R4 云端 action log）。
+
+#### 范围确认
+- **做**：草稿自动保存（debounce）、StartIssueDraft 时恢复未提交草稿、提交/取消后删除草稿。
+- **不做**：close/reopen 的本地持久化（→ R4 云端 action log）；discussion/review 草稿（→ R4，复用 `local_drafts` 表 + 不同 type）。
+
+#### 落地现状
+数据层（`LocalDraftEntity` + FK CASCADE、`LocalDraftDao`、DB v3 migration、Repository 接口 + Room/InMemory 双实现）由 R3-A 交付，无需 schema 变更。本节只做 ViewModel 接线 + 序列化。
+
+#### 实施步骤
+
+**步骤1. 序列化**
+- `IssueDraft` / `PlaybackAnchor` / `KmdSourceRange` / `IssueSeverity` 加 `@Serializable`（kotlinx.serialization，插件已在 app 模块）。
+- `IssueDraft` 新增 `id: String` 字段（持久化主键 `"draft-{uuid}"`，默认 `""`）。
+- `IssueDraft.toJson()` / `issueDraftFromJson(payload)` 编解码，`Json { ignoreUnknownKeys = true }` 容忍未来字段。
+
+**步骤2. debounce 自动保存（时钟比较，镜像 R3-B 进度节流）**
+- `lastDraftSavedAt: Map<draftId, Long>` + `DRAFT_SAVE_INTERVAL_MS = 1_000L`。
+- `onAction` 拦截 `UpdateIssueDraftMessage/Suggestion` → reduce → `scheduleDraftSave()`（窗口内跳过，窗口边界处写入）。
+- `onCleared` 兜底：`flushDraftOnCleared()` 用 `runBlocking` 强存一次当前草稿（防"最后一字不按键就退出"丢失）。
+- **不用 delay/Job/debounce**——与现有 ViewModel 时钟节流模式一致，在 `UnconfinedTestDispatcher` 下可测。
+
+**步骤3. StartIssueDraft 时恢复**
+- `onAction` 拦截 `StartIssueDraftFromPlayback` → `startIssueDraftWithPersistence()`：先 reduce 建骨架 → 生成 UUID id（`AssignIssueDraftId`）→ 查 `getDraftsByType(workId, "issue")` → 有则 `UpdateIssueDraftFromPersisted` 恢复。
+- **恢复语义**：恢复 message + suggestion + severity；**不恢复** sourceRange/playbackAnchor（每次重新采集锚点更安全）。
+- 两个内部 action（`AssignIssueDraftId` / `UpdateIssueDraftFromPersisted`）保持 reducer 纯函数——UUID 生成和 Room IO 都在 VM 侧。
+
+**步骤4. 提交/取消后删除**
+- `submitIssueDraft()` 开头调 `deleteCurrentDraftIfAny()`（已转为 issue，不再需要缓冲）。
+- `onAction` 拦截 `CancelIssueDraft` → `deleteCurrentDraftIfAny()` → reduce。
+
+**步骤5. 类型常量**
+- `LocalDraftTypes` object（`ISSUE` / `DISCUSSION` / `REVIEW`），避免裸字符串散落。
+
+#### 测试清单（KmdReaderViewModelTest +6，28 → 34）
+- `updateIssueDraftMessageDebouncesWrites` — clock=0 存，clock=100 跳过，clock=1001 存
+- `startIssueDraftRestoresPersistedMessage` — 预置草稿，StartIssueDraft 后恢复 message/suggestion/severity
+- `startIssueDraftWithNoPersistedDraftUsesDefaults` — 无持久化草稿用 reducer 默认值
+- `submitIssueDraftDeletesPersistedDraft` — 提交后 local_drafts 为空
+- `cancelIssueDraftDeletesPersistedDraft` — 取消后 local_drafts 为空
+- `draftSerializeRoundTripPreservesFields` — IssueDraft ↔ JSON 字段无损
+
+#### 审阅修复（PR #6 review，2026-06-21）
+
+- **F1（High）恢复草稿 id 错配**：`startIssueDraftWithPersistence` 原总是先生成新 UUID 再恢复，但恢复 action 只带 message/suggestion/severity 不带 persisted id → submit/cancel 删的是新 UUID，旧 `draft-old` 留为孤儿 → 下次又恢复。修复：查库先判断——有持久化草稿则复用其 `LocalDraft.id`（`AssignIssueDraftId(restored.id)`），无则才生成新 UUID。
+- **F2（Medium）trailing flush 缺失**：`scheduleDraftSave` 是 leading-edge throttle（首次即写、窗口内跳过），不安排 trailing save。用户在窗口内打完最后一字后若切走（SelectSourceLine/ClearIssueFocus/SelectIssue），最后一笔丢失。修复：这些清空/替换 issueDraft 的导航型 action 前调 `flushDraftSynchronously()`（忽略窗口立即存）。onCleared 仍作最终兜底。
+
+新增 2 个回归用例（KmdReaderViewModelTest 34 → 36）：
+- `restoredDraftSubmitDeletesCorrectRowNotOrphan` — 预置 draft-old，恢复后 submit，断言 draft-old 行被删（无孤儿）
+- `trailingFlushPersistsLastEditBeforeNavigation` — 窗口内打完最后一字 → SelectSourceLine → 断言最后一笔已落盘
+
+#### 审阅修复第二轮（PR #6 review round 2，2026-06-22）
+
+- **F1（Medium）异步恢复无 workId 守卫**：`startIssueDraftWithPersistence` 的 Room 查询返回后直接 dispatch `AssignIssueDraftId`/`UpdateIssueDraftFromPersisted`，不校验当前 issueDraft 是否还是当初那个 work。用户快速从 A 起草→切 B 起草，A 的迟到恢复会覆盖 B 的草稿。修复：发起时捕获 `requestedWorkId` 作为 request token，查询返回后校验 `_state.value.issueFocus.issueDraft?.workId == requestedWorkId`，不匹配则丢弃。
+- **F2（续）OpenWork 未纳入 trailing flush**：上一轮 F2 覆盖了 SelectSourceLine/ClearIssueFocus/SelectIssue，但遗漏了 OpenWork（reducer 重建 IssueFocusState 丢弃 draft）。修复：OpenWork 在 reduce 前调 `flushDraftSynchronously()`。至此所有清空/替换 draft 的 action 均已纳入 pre-flush guard。
+
+新增 2 个回归用例（KmdReaderViewModelTest 36 → 38）：
+- `staleRestoreDoesNotOverwriteDraftAfterWorkSwitch` — A 起草→切 B 起草，断言当前草稿是 B 的（A 迟到恢复被丢弃）
+- `openWorkFlushesPendingDraftBeforeReplacingIssueFocus` — 窗口内打完最后一字 → OpenWork，断言最后一笔已落盘
+
+#### 审阅修复第二轮补强（PR #6 review round 2 residual，2026-06-22）
+
+非阻塞测试覆盖瑕疵（reviewer 指出，不作为合并门槛）：`staleRestoreDoesNotOverwriteDraftAfterWorkSwitch` 原版在 A 起草后立刻 `advanceUntilIdle()`，A 的恢复在 B 起草前已提前完成，并未真正制造“迟到 A 覆盖 B”的竞态窗口——生产代码的 `requestedWorkId` guard 正确但此用例证明力不足。
+
+修复：引入 `ControllableLocalLibraryRepository`（可挂起 fake），用 `CompletableDeferred` 精确卡住 A 的第一次 `getDraftsByType`，B 起草完成后再释放 gate，真正复现迟到路径。**经验证**：临时注释掉 guard 后此用例必须失败（race window 被打开），恢复 guard 后通过——证明其回归价值成立。
+
+> 注意：fake 不能用 `Mutex`/`synchronized` 包裹 `gate.await()`——挂起时持锁会让 B 的查询一并阻塞，把竞态窗口塌缩掉。UnconfinedTestDispatcher 单线程且无抢占，普通 Boolean 标志位即可安全区分“第一次调用”。
 
 ### R3-D. 本地导入
 - 扩展 frontmatter 解析器

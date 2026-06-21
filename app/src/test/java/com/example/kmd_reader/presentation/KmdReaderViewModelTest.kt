@@ -3,8 +3,14 @@ package com.example.kmd_reader.presentation
 import com.example.kmd_reader.data.WorkRepository
 import com.example.kmd_reader.data.mock.MockKmdSources
 import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalDraft
+import com.example.kmd_reader.data.repository.LocalDraftTypes
 import com.example.kmd_reader.data.repository.LocalLibraryEntry
+import com.example.kmd_reader.data.repository.LocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalRevision
 import com.example.kmd_reader.data.mock.MockWorks
+import com.example.kmd_reader.domain.model.IssueSeverity
+import com.example.kmd_reader.domain.model.KmdSourceRange
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 import com.example.kmd_reader.runtime.ReaderLoadRequest
@@ -16,11 +22,15 @@ import com.example.kmd_reader.runtime.ReaderSettings
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -880,6 +890,418 @@ class KmdReaderViewModelTest {
         )
     }
 
+    // ===== R3-C：issue 草稿本地缓冲 =====
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun updateIssueDraftMessageDebouncesWrites() = runTest {
+        // R3-C 步骤2：时钟节流。clock=0 首次存，clock=100 窗口内跳过，clock=1001 窗口外再存。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        // 起草（生成 draft id），首次按键 clock=0 触发存盘。
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("a"))
+        advanceUntilIdle()
+        val draftId = viewModel.state.value.issueFocus.issueDraft?.id
+        assertTrue("draft id should be assigned", draftId.orEmpty().isNotBlank())
+        val saved0 = localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE)
+        assertEquals(1, saved0.size)
+        assertTrue(saved0.first().payload.contains(""""message":"a""""))
+
+        // clock=100 窗口内——跳过。
+        clock = 100L
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("ab"))
+        advanceUntilIdle()
+        val saved1 = localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE)
+        assertEquals("windowed keystroke must not write", "a", saved1.first().let { issueDraftFromJson(it.payload).message })
+
+        // clock=1001 窗口外——存。
+        clock = 1_001L
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("abc"))
+        advanceUntilIdle()
+        val saved2 = localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE)
+        assertEquals("post-window keystroke must write", "abc", saved2.first().let { issueDraftFromJson(it.payload).message })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun startIssueDraftRestoresPersistedMessage() = runTest {
+        // R3-C 步骤3：StartIssueDraft 时恢复未提交草稿的 message/suggestion/severity。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 预置一条未提交草稿。
+        val preDraft = IssueDraft(
+            id = "draft-old",
+            workId = "glass-rail",
+            revisionId = "rev-1",
+            message = "之前写到一半的内容",
+            suggestion = "之前的修改建议",
+            severity = IssueSeverity.Error
+        )
+        localLibrary.saveDraft(
+            LocalDraft("draft-old", "glass-rail", LocalDraftTypes.ISSUE, preDraft.toJson(), 0)
+        )
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        val draft = viewModel.state.value.issueFocus.issueDraft
+        assertNotNull("draft should be created", draft)
+        assertEquals("restored message", "之前写到一半的内容", draft!!.message)
+        assertEquals("restored suggestion", "之前的修改建议", draft.suggestion)
+        assertEquals("restored severity", IssueSeverity.Error, draft.severity)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun startIssueDraftWithNoPersistedDraftUsesDefaults() = runTest {
+        // R3-C 步骤3：无持久化草稿时用 reducer 默认值。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        val draft = viewModel.state.value.issueFocus.issueDraft
+        assertNotNull("draft should be created", draft)
+        // reducer 默认 suggestion。
+        assertEquals("请补充期望表现或修改建议。", draft!!.suggestion)
+        assertTrue("no persisted draft → empty local_drafts", localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty())
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun submitIssueDraftDeletesPersistedDraft() = runTest {
+        // R3-C 步骤4：提交后草稿从 local_drafts 删除。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { 42L },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("待确认的问题"))
+        advanceUntilIdle()
+        assertFalse("draft should be persisted before submit", localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty())
+
+        viewModel.onAction(KmdReaderAction.SubmitIssueDraft)
+        advanceUntilIdle()
+
+        assertTrue(
+            "draft must be deleted after submit",
+            localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty()
+        )
+        // issue 已创建。
+        val issues = viewModel.state.value.issuesByWorkId.getValue("glass-rail")
+        assertTrue(issues.any { it.message == "待确认的问题" })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun cancelIssueDraftDeletesPersistedDraft() = runTest {
+        // R3-C 步骤4：取消后草稿从 local_drafts 删除。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("写到一半"))
+        advanceUntilIdle()
+        assertFalse(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty())
+
+        viewModel.onAction(KmdReaderAction.CancelIssueDraft)
+        advanceUntilIdle()
+
+        assertTrue(
+            "draft must be deleted after cancel",
+            localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty()
+        )
+        assertNull("issueDraft cleared", viewModel.state.value.issueFocus.issueDraft)
+    }
+
+    @Test
+    fun draftSerializeRoundTripPreservesFields() {
+        // R3-C 步骤1：IssueDraft ↔ JSON 字段无损。
+        val original = IssueDraft(
+            id = "draft-x",
+            workId = "glass-rail",
+            revisionId = "rev-1",
+            sourceRange = KmdSourceRange(startLine = 3, endLine = 5),
+            playbackAnchor = PlaybackAnchor(timeMs = 1200, progress = 0.5f, line = 3, markerId = "m3"),
+            severity = IssueSeverity.Warning,
+            message = "这条表现需要确认",
+            suggestion = "建议调整效果"
+        )
+        val json = original.toJson()
+        val restored = issueDraftFromJson(json)
+        assertEquals(original.id, restored.id)
+        assertEquals(original.workId, restored.workId)
+        assertEquals(original.revisionId, restored.revisionId)
+        assertEquals(original.sourceRange, restored.sourceRange)
+        assertEquals(original.playbackAnchor, restored.playbackAnchor)
+        assertEquals(original.severity, restored.severity)
+        assertEquals(original.message, restored.message)
+        assertEquals(original.suggestion, restored.suggestion)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun restoredDraftSubmitDeletesCorrectRowNotOrphan() = runTest {
+        // F1：预置 draft-old，StartIssueDraft 恢复它，submit 后 draft-old 行必须被删除
+        // （修复前会生成新 UUID → 删错行 → draft-old 留为孤儿 → 下次又恢复）。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val preDraft = IssueDraft(
+            id = "draft-old",
+            workId = "glass-rail",
+            revisionId = "rev-1",
+            message = "之前写到一半",
+            suggestion = "建议",
+            severity = IssueSeverity.Warning
+        )
+        localLibrary.saveDraft(
+            LocalDraft("draft-old", "glass-rail", LocalDraftTypes.ISSUE, preDraft.toJson(), 0)
+        )
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { 100L },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // 恢复后 IssueDraft.id 应等于 draft-old（复用持久化 id）。
+        val draft = viewModel.state.value.issueFocus.issueDraft
+        assertNotNull(draft)
+        assertEquals("draft-old", draft!!.id)
+
+        viewModel.onAction(KmdReaderAction.SubmitIssueDraft)
+        advanceUntilIdle()
+
+        assertTrue(
+            "draft-old row must be gone after submit (no orphan)",
+            localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).isEmpty()
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun trailingFlushPersistsLastEditBeforeNavigation() = runTest {
+        // F2：用户在节流窗口内打完最后一字后切走（SelectSourceLine），
+        // 最后一笔必须落盘（修复前 leading-edge throttle 会跳过，最后一字丢失）。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // clock=0 首次存。
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("hello"))
+        advanceUntilIdle()
+        assertEquals("hello", issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message)
+
+        // clock=100 窗口内——跳过存盘。
+        clock = 100L
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("hello world"))
+        advanceUntilIdle()
+        assertEquals(
+            "windowed edit not yet saved",
+            "hello",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+
+        // 切走（SelectSourceLine）——trailing flush 必须存最后一笔 "hello world"。
+        viewModel.onAction(KmdReaderAction.SelectSourceLine(5))
+        advanceUntilIdle()
+        assertEquals(
+            "trailing flush must persist the last edit before navigation",
+            "hello world",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleRestoreDoesNotOverwriteDraftAfterWorkSwitch() = runTest {
+        // F1：work A 起草后切到 work B 起草，A 的迟到恢复结果不能覆盖 B 的草稿。
+        //
+        // 真正的竞态窗口：A 的 getDraftsByType 必须在 B 起草完成后才返回。
+        // 早期版本在 A 起草后立刻 advanceUntilIdle()，让 A 的恢复提前完成，并没有
+        // 制造“迟到 A 覆盖 B”的竞态——用 CompletableDeferred 卡住 A 的查询，
+        // 在 B 起草完成后再释放，精确复现迟到路径，验证 requestedWorkId guard。
+        val gateForA = CompletableDeferred<List<LocalDraft>>()
+        val localLibrary = ControllableLocalLibraryRepository(firstGetDraftsByTypeGate = gateForA)
+
+        // 预置 A 的旧草稿（A 查询释放后会返回它）。
+        val preDraftA = IssueDraft(
+            id = "draft-A", workId = "glass-rail", revisionId = "rev-1",
+            message = "A的内容", severity = IssueSeverity.Warning
+        )
+        localLibrary.saveDraft(
+            LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0)
+        )
+        // 预置 B 的旧草稿。
+        val preDraftB = IssueDraft(
+            id = "draft-B", workId = "rain-city", revisionId = "rev-2",
+            message = "B的内容", severity = IssueSeverity.Warning
+        )
+        localLibrary.saveDraft(
+            LocalDraft("draft-B", "rain-city", LocalDraftTypes.ISSUE, preDraftB.toJson(), 0)
+        )
+
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        // work A Ready，起草 A（触发异步 getDraftsByType("glass-rail")，卡在 gate 上）。
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        // A 的恢复协程正挂在 gateForA.await()，没有完成。
+
+        // 切到 work B Ready，起草 B（B 的查询走默认路径，立即完成并回填 B）。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "rain-city", durationMs = 3000))
+        advanceUntilIdle()
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+        // B 的恢复已完成，当前草稿是 B。
+
+        // 现在释放 A 的迟到查询——requestedWorkId guard 必须丢弃这笔回填。
+        gateForA.complete(
+            listOf(
+                LocalDraft("draft-A", "glass-rail", LocalDraftTypes.ISSUE, preDraftA.toJson(), 0)
+            )
+        )
+        advanceUntilIdle()
+
+        // 当前草稿必须是 B 的（message="B的内容"），不能被 A 的迟到恢复覆盖。
+        val draft = viewModel.state.value.issueFocus.issueDraft
+        assertNotNull(draft)
+        assertEquals(
+            "stale A restore must not overwrite B's draft",
+            "rain-city",
+            draft!!.workId
+        )
+        assertEquals(
+            "B's restored message must survive late A restore",
+            "B的内容",
+            draft.message
+        )
+        // 关键回归点：B 的 id（draft-B）绝不能被 A 的迟到回填改成 draft-A。
+        assertEquals("draft-B", draft.id)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun openWorkFlushesPendingDraftBeforeReplacingIssueFocus() = runTest {
+        // F2（续）：用户在节流窗口内打完最后一字后直接 OpenWork 切到另一本作品，
+        // 最后一笔必须落盘（修复前 OpenWork 未纳入 trailing flush，会丢）。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+        bringReaderToReady(viewModel, runtimeBridge, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.StartIssueDraftFromPlayback)
+        advanceUntilIdle()
+
+        // clock=0 首次存。
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("first edit"))
+        advanceUntilIdle()
+        assertEquals(
+            "first edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+
+        // clock=100 窗口内——跳过存盘。
+        clock = 100L
+        viewModel.onAction(KmdReaderAction.UpdateIssueDraftMessage("second edit"))
+        advanceUntilIdle()
+        assertEquals(
+            "windowed edit not yet saved",
+            "first edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+
+        // OpenWork 切到另一本——trailing flush 必须存最后一笔 "second edit"。
+        viewModel.onAction(KmdReaderAction.OpenWork("rain-city"))
+        advanceUntilIdle()
+        assertEquals(
+            "OpenWork must flush pending draft before replacing issue focus",
+            "second edit",
+            issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+    }
+
+    /** 把 reader 推进到 Ready 态的共用设置（StartIssueDraft 需要 Ready session 采集锚点）。 */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun TestScope.bringReaderToReady(
+        viewModel: KmdReaderViewModel,
+        runtimeBridge: ManualRuntimeBridge,
+        workId: String
+    ) {
+        viewModel.onAction(KmdReaderAction.OpenWork(workId))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = workId, durationMs = 2400))
+        advanceUntilIdle()
+    }
+
     private fun progressEntry(
         workId: String,
         progress: Float,
@@ -940,6 +1362,54 @@ private class SourceMissingWorkRepository : WorkRepository {
 
     override suspend fun listIssues(workId: String, refresh: Boolean): List<ScriptIssue> =
         emptyList()
+}
+
+/**
+ * [LocalLibraryRepository] 的可挂起替身：第一次 [getDraftsByType] 调用挂起在
+ * [firstGetDraftsByTypeGate] 上，由测试控制何时（及返回什么）。
+ *
+ * 用于精确制造“迟到恢复”竞态窗口：A 的草稿恢复查询被卡住，等 B 起草完成后再释放，
+ * 以验证 [KmdReaderViewModel.startIssueDraftWithPersistence] 里的 requestedWorkId guard。
+ * 其余方法委派给内存实现，保持其它行为不变。
+ *
+ * 注意：不能用 [Mutex]/synchronized 包裹 gate.await()——挂起时仍持锁会让后续调用
+ * （B 的查询）一并阻塞，把竞态窗口塌缩掉。UnconfinedTestDispatcher 单线程且无抢占，
+ * 这里用普通 Boolean 标志位即可安全区分“第一次调用”。
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+private class ControllableLocalLibraryRepository(
+    private val firstGetDraftsByTypeGate: CompletableDeferred<List<LocalDraft>>
+) : LocalLibraryRepository {
+    private val delegate = InMemoryLocalLibraryRepository()
+    private var firstQuerySeen = false
+
+    override suspend fun getDraftsByType(workId: String, type: String): List<LocalDraft> {
+        if (!firstQuerySeen) {
+            firstQuerySeen = true
+            // 第一次查询挂起到 gate 完成——返回值由测试注入。
+            // 不在持锁状态下 await，否则后续 getDraftsByType 会被一起卡死。
+            return firstGetDraftsByTypeGate.await()
+        }
+        return delegate.getDraftsByType(workId, type)
+    }
+
+    override suspend fun getEntry(workId: String): LocalLibraryEntry? = delegate.getEntry(workId)
+    override suspend fun getShelf(): List<LocalLibraryEntry> = delegate.getShelf()
+    override suspend fun getHistory(): List<LocalLibraryEntry> = delegate.getHistory()
+    override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
+    override suspend fun updateProgress(
+        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long
+    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now)
+    override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
+        delegate.setOnShelf(workId, onShelf)
+    override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
+    override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
+        delegate.getActiveLocalRevision(workId)
+    override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
+    override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
+    override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
+    override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
 }
 
 private class ManualRuntimeBridge : ReaderRuntimeBridge {

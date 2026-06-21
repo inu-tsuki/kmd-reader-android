@@ -237,6 +237,25 @@ object KmdReaderReducer {
                 )
             )
 
+            // R3-C：VM 生成 UUID 后回填 id（reducer 不调 UUID，保持纯函数）。
+            is KmdReaderAction.AssignIssueDraftId -> state.copy(
+                issueFocus = state.issueFocus.copy(
+                    issueDraft = state.issueFocus.issueDraft?.copy(id = action.id)
+                )
+            )
+
+            // R3-C：从 local_drafts 恢复 message/suggestion/severity。
+            // 不恢复 sourceRange/playbackAnchor——每次 StartIssueDraft 重新采集锚点更安全。
+            is KmdReaderAction.UpdateIssueDraftFromPersisted -> state.copy(
+                issueFocus = state.issueFocus.copy(
+                    issueDraft = state.issueFocus.issueDraft?.copy(
+                        message = action.message,
+                        suggestion = action.suggestion,
+                        severity = action.severity
+                    )
+                )
+            )
+
             KmdReaderAction.SubmitIssueDraft -> state
 
             KmdReaderAction.CancelIssueDraft -> state.copy(

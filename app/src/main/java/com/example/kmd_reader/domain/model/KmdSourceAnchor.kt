@@ -1,5 +1,8 @@
 package com.example.kmd_reader.domain.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class KmdSourceRange(
     val startLine: Int,
     val startColumn: Int? = null,

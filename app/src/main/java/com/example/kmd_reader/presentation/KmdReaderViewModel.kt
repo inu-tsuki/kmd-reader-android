@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.kmd_reader.data.MockWorkRepository
 import com.example.kmd_reader.data.WorkRepository
 import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
+import com.example.kmd_reader.data.repository.LocalDraft
+import com.example.kmd_reader.data.repository.LocalDraftTypes
 import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.domain.kmd.KmdSourceMetadataParser
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.UUID
 
 class KmdReaderViewModel(
     private val repository: WorkRepository = MockWorkRepository(),
@@ -51,9 +54,14 @@ class KmdReaderViewModel(
     // （这也替代了原先的 hasSavedProgress 标志——不存在 key 即首次，无需独立标志。）
     private val lastProgressSavedAt = mutableMapOf<String, Long>()
 
+    // R3-C：issue 草稿 debounce 自动保存。按 draftId 记录上次落盘时间戳，与进度节流同构。
+    private val lastDraftSavedAt = mutableMapOf<String, Long>()
+
     companion object {
         // 播放期间进度落盘节流间隔。单本 20min 作品写 ~240 次，断电最多丢 5s 进度。
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
+        // 草稿落盘节流间隔。草稿比进度更敏感（用户逐字编辑），1s 窗口 + onCleared 兜底。
+        private const val DRAFT_SAVE_INTERVAL_MS = 1_000L
     }
 
     init {
@@ -65,6 +73,8 @@ class KmdReaderViewModel(
         when (action) {
             KmdReaderAction.RefreshWorks -> refreshWorks()
             is KmdReaderAction.OpenWork -> {
+                // F2（续）：OpenWork 会重建 IssueFocusState 丢弃当前 draft，需先 trailing flush。
+                flushDraftSynchronously()
                 reduce(action)
                 loadIssues(action.workId)
             }
@@ -84,6 +94,25 @@ class KmdReaderViewModel(
             KmdReaderAction.PauseReader -> pauseReader()
             is KmdReaderAction.SeekReader -> seekReader(action.progress)
             KmdReaderAction.SubmitIssueDraft -> submitIssueDraft()
+            KmdReaderAction.StartIssueDraftFromPlayback -> startIssueDraftWithPersistence()
+            is KmdReaderAction.UpdateIssueDraftMessage,
+            is KmdReaderAction.UpdateIssueDraftSuggestion -> {
+                reduce(action)
+                scheduleDraftSave()
+            }
+            KmdReaderAction.CancelIssueDraft -> {
+                deleteCurrentDraftIfAny()
+                reduce(action)
+            }
+            // F2 修复：这些 action 会清空/替换 issueDraft（reducer 里 issueDraft = null）。
+            // leading-edge throttle 不会安排 trailing save，故在此同步 flush 最后一笔，
+            // 防用户在节流窗口内打完最后一字后切走导致丢失。
+            is KmdReaderAction.SelectSourceLine,
+            KmdReaderAction.ClearIssueFocus,
+            is KmdReaderAction.SelectIssue -> {
+                flushDraftSynchronously()
+                reduce(action)
+            }
             is KmdReaderAction.JumpIssueToPlayback -> jumpIssueToPlayback(action.issueId)
             KmdReaderAction.JumpSelectedSourceLineToPlayback -> jumpSelectedSourceLineToPlayback()
             KmdReaderAction.RetryReaderRuntime -> retryReaderRuntime()
@@ -523,9 +552,141 @@ class KmdReaderViewModel(
         }
     }
 
+    // ===== R3-C：issue 草稿本地缓冲 =====
+
+    /**
+     * R3-C 步骤3：起草时先建 draft 骨架（reducer 采集锚点），再生成持久化 id，
+     * 最后查库恢复未提交草稿的 message/suggestion/severity。
+     * reducer 保持纯函数——UUID 生成和 Room IO 都在 VM 侧。
+     */
+    private fun startIssueDraftWithPersistence() {
+        reduce(KmdReaderAction.StartIssueDraftFromPlayback)
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        // 捕获发起时的 workId 作为 request token。异步恢复返回时校验当前 issueDraft 仍是
+        // 这个 work（用户可能已切到别的 work 起草），是则丢弃迟到结果，防覆盖 B 的草稿。
+        val requestedWorkId = draft.workId
+        viewModelScope.launch {
+            runCatching {
+                val persisted = localLibrary.getDraftsByType(requestedWorkId, LocalDraftTypes.ISSUE)
+                // F1 修复：Room 查询返回时校验当前 draft 仍属于发起时的 work。
+                val current = _state.value.issueFocus.issueDraft
+                if (current == null || current.workId != requestedWorkId) {
+                    return@runCatching
+                }
+                if (persisted.isEmpty()) {
+                    // 无持久化草稿——生成新 id。
+                    reduce(KmdReaderAction.AssignIssueDraftId("draft-${UUID.randomUUID()}"))
+                    return@runCatching
+                }
+                val restored = persisted.first()
+                // 复用持久化草稿的 id，使后续 deleteCurrentDraftIfAny 能删对行。
+                reduce(KmdReaderAction.AssignIssueDraftId(restored.id))
+                val restoredDraft = runCatching { issueDraftFromJson(restored.payload) }.getOrNull()
+                if (restoredDraft != null) {
+                    // 恢复文本字段 + severity，不恢复锚点（每次重新采集更安全）。
+                    reduce(
+                        KmdReaderAction.UpdateIssueDraftFromPersisted(
+                            message = restoredDraft.message,
+                            suggestion = restoredDraft.suggestion,
+                            severity = restoredDraft.severity
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * R3-C 步骤2：debounce 自动保存。镜像进度节流（时钟比较，不用 delay/Job）。
+     * 窗口内的 keystroke 跳过，窗口边界处的下次 keystroke 写入；onCleared 兜底最后一笔。
+     */
+    private fun scheduleDraftSave() {
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        if (draft.id.isBlank()) return
+        val now = nowMillis()
+        val last = lastDraftSavedAt[draft.id]
+        if (last != null && now - last < DRAFT_SAVE_INTERVAL_MS) return
+        lastDraftSavedAt[draft.id] = now
+        viewModelScope.launch {
+            runCatching {
+                localLibrary.saveDraft(
+                    LocalDraft(
+                        id = draft.id,
+                        workId = draft.workId,
+                        type = LocalDraftTypes.ISSUE,
+                        payload = draft.toJson(),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * R3-C 步骤4：提交/取消时删除草稿（已转为 issue 或用户放弃）。
+     * viewModelScope.launch 异步删——onCleared 路径用 [flushDraftOnCleared] 同步删。
+     */
+    private fun deleteCurrentDraftIfAny() {
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        if (draft.id.isBlank()) return
+        lastDraftSavedAt.remove(draft.id)
+        viewModelScope.launch {
+            runCatching { localLibrary.deleteDraft(draft.id) }
+        }
+    }
+
+    /**
+     * R3-C 步骤2 兜底：onCleared 时同步存一次当前草稿（防"打完最后一字不按键就退出"丢失）。
+     * 与 [flushProgressOnCleared] 同理，viewModelScope 已取消，用 runBlocking。
+     */
+    internal fun flushDraftOnCleared() {
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        if (draft.id.isBlank()) return
+        runCatching {
+            runBlocking {
+                localLibrary.saveDraft(
+                    LocalDraft(
+                        id = draft.id,
+                        workId = draft.workId,
+                        type = LocalDraftTypes.ISSUE,
+                        payload = draft.toJson(),
+                        updatedAt = nowMillis()
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * F2 修复：导航型 action（SelectSourceLine/ClearIssueFocus/SelectIssue）清空/替换
+     * issueDraft 前的 trailing flush。忽略节流窗口立即存——这些 action 是草稿结束的信号。
+     * viewModelScope 仍活着，用 launch 异步存（与 scheduleDraftSave 同）。
+     */
+    private fun flushDraftSynchronously() {
+        val draft = _state.value.issueFocus.issueDraft ?: return
+        if (draft.id.isBlank()) return
+        val now = nowMillis()
+        lastDraftSavedAt[draft.id] = now
+        viewModelScope.launch {
+            runCatching {
+                localLibrary.saveDraft(
+                    LocalDraft(
+                        id = draft.id,
+                        workId = draft.workId,
+                        type = LocalDraftTypes.ISSUE,
+                        payload = draft.toJson(),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+    }
+
     private fun submitIssueDraft() {
         val state = _state.value
         val draft = state.issueFocus.issueDraft ?: return
+        // R3-C 步骤4：提交后删除草稿（已转为 issue，不再需要缓冲）。
+        deleteCurrentDraftIfAny()
         val message = draft.message.trim().ifBlank {
             draft.sourceRange?.let { "播放到 ${it.lineLabel} 时需要确认表现。" }
                 ?: "阅读播放中发现一个待确认问题。"
@@ -782,6 +943,8 @@ class KmdReaderViewModel(
         // R3-B 步骤5：兜底落盘。viewModelScope 此时已取消，用 runBlocking 同步写最后一次进度。
         // 这是 Android ViewModel 落盘的标准做法；单次 Room 写 WAL 下 <1ms，窗口可接受。
         flushProgressOnCleared()
+        // R3-C 步骤2 兜底：同步存一次当前草稿（防最后一字丢失）。
+        flushDraftOnCleared()
         runtimeBridge.dispose()
         super.onCleared()
     }
