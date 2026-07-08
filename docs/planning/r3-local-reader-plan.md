@@ -1,7 +1,7 @@
 # R3：完善的本地阅读器 —— 实施规划
 
 > 文档状态：规划草案
-> 最近更新：2026-06-19
+> 最近更新：2026-07-08（采纳 storage spike §7 推荐全表；R3-D 扩写为 D1–D4 切片）
 > 代号：R3
 > 权威范围：本地数据模型、书架、导入、阅读进度持久化、设置、完整离线阅读体验
 
@@ -48,7 +48,8 @@ LocalLibraryEntry
   ├─ source: WorkSourceType（Local / Remote / Mock）
   ├─ onShelf: Boolean（是否在书架：主动收藏/导入 = true；仅读过 = false）
   ├─ title / authorName / presentation 摘要（从 frontmatter 或 API 元数据生成）
-  ├─ kmdSource: String?（.kmd 源文本全文；本地导入必填，社区/mock 可选缓存）
+  ├─ kmdSource: String?（裸 .kmd 无资产作品的 MVP 快捷路径；.kmdwork 走 bundle 指针，此处留 null）
+  ├─ bundleId: String?（指向 filesDir/bundles/<bundleId>/；.kmdwork 导入必填，裸 .kmd / 社区 / mock 为 null）
   ├─ contentUri: String（本地导入的文件 Uri，或 API sourceUrl）
   ├─ readingProgress: Float（0..1，进度持久化字段）
   ├─ readingTimeMs: Long?
@@ -81,7 +82,7 @@ LocalLibraryEntry
 - 新增 `LocalLibraryRepository`：管理 LocalLibraryEntry 的 CRUD + 进度读写。
 - 浏览页仍走 `WorkRepository`（社区发现 + mock fallback）。
 - 书架/阅读历史走 `LocalLibraryRepository`。
-- 用户从浏览/导入加入书架时，`LocalLibraryRepository` 创建 entry（社区作品存摘要 + contentUri，本地导入存 kmdSource 全文）。
+- 用户从浏览/导入加入书架时，`LocalLibraryRepository` 创建 entry（社区作品存摘要 + contentUri；本地导入裸 `.kmd` 存 `kmdSource` 全文，`.kmdwork` 存 `bundleId` 指针、`kmdSource` 留 null）。
 
 ### 2.2 进度持久化：作为 LocalLibraryEntry 字段
 
@@ -94,13 +95,14 @@ LocalLibraryEntry
 
 ### 2.3 本地导入：SAF + frontmatter 解析
 
-导入流程：
+导入流程（双格式，对齐 R3-D3 采纳的 storage spike）：
 ```
-用户点「导入」→ SAF 文件选择器 → 读取 .kmd 文件文本
-  → KmdSourceMetadataParser（扩展版，解析 title/作者/mode/design 尺寸）
-  → 生成 LocalLibraryEntry（source=Local, kmdSource=全文, contentUri=SAF Uri）
-  → 写入 Room
-  → 加入书架，可打开详情和阅读
+用户点「导入」→ SAF 文件选择器 → 读 magic bytes 判 .kmdwork vs 裸 .kmd
+  ├─ 裸 .kmd → 读文件文本 → KmdSourceMetadataParser（扩展版）
+  │    → 生成 LocalLibraryEntry（source=Local, kmdSource=全文, bundleId=null, contentUri=SAF Uri）
+  └─ .kmdwork → 解压进 filesDir/bundles/<bundleId>/（spike §5.2 Z1–Z9 防护）
+       → 校验 work.json + contentHash → 生成 LocalLibraryEntry（source=Local, kmdSource=null, bundleId=指针, contentUri=SAF Uri）
+  → 写入 Room → 加入书架，可打开详情和阅读
 ```
 
 需要扩展 `KmdSourceMetadataParser` 或新建 `KmdImportParser`，解析完整 frontmatter（title / author / mode / designWidth / designHeight / speed / tags）。
@@ -116,9 +118,9 @@ LocalLibraryEntry
 │    （一对一，主键 workId）                              │
 ├─ 内容级 ──────────────────────────────────────────────┤
 │  local_revisions                                       │
-│    本地轻度更改（待同步缓冲）：改过的 .kmd 源文本       │
-│    作者纠错 / 审阅者评审，改完同步云端                  │
-│    播放优先读取最新未同步版本                           │
+│    本地提交（commit 模型最小实现）：.kmd 源文本快照     │
+│    作者纠错 / 审阅者评审，本地领先的提交同步云端        │
+│    播放优先读取最新提交                                 │
 │    （一对多，外键→local_library.workId）                │
 ├─ 草稿级 ──────────────────────────────────────────────┤
 │  local_drafts                                          │
@@ -153,7 +155,8 @@ LocalLibraryEntry
   ├─ source: WorkSourceType（Local / Remote / Mock）
   ├─ onShelf: Boolean（书架 vs 阅读历史）
   ├─ title / authorName / presentation 摘要（快照）
-  ├─ kmdSource: String?（本地导入的源文本全文）
+  ├─ kmdSource: String?（裸 .kmd 无资产作品 MVP 快捷路径；.kmdwork 留 null）
+  ├─ bundleId: String?（指向 filesDir/bundles/<bundleId>/；.kmdwork 导入必填，其余 null）
   ├─ contentUri: String
   ├─ readingProgress: Float（0..1）
   ├─ readingTimeMs: Long?
@@ -164,6 +167,7 @@ LocalLibraryEntry
 ```
 
 自包含、无外键指向 `works`，避免 mock 作品不在 Room 的崩溃陷阱。
+`kmdSource` vs `bundleId` 双路径对齐 R3-D3 / storage spike §2.5：裸 `.kmd` 走 `kmdSource` 全文快捷路径；带 assets 的 `.kmdwork` 走 `bundleId` 指针，source 从 bundle store 读（spike C4 红线：Room 只存轻量索引，不内联全量）。
 
 ### 2.6 local_drafts（草稿级，通用缓冲）
 
@@ -199,30 +203,37 @@ issue/discussion/review 的 close/reopen/提交本质是云端行为。本地持
 - 这要求 community-api 的 `location` 字段从自由文本演进为结构化形式——是跨端契约变更，reader 无法独立解决。
 - **R3 不动**：不涉及位置引用建模。现有 `lineNumberForIssue()` 启发式保持原样（已知不完美，但在 API 契约演进前是唯一可行方案）。
 
-### 2.7 local_revisions（本地轻度更改 / 待同步缓冲）
+### 2.7 local_revisions（本地提交 —— commit 模型最小实现）
 
-**场景定位（2026-06-19 明确）**：本地修改主要服务于 KMD 作者预览纠错和社区审阅者上架评审——改完即同步云端，云端本就提供 revisions 体系。本地只是加载云端 revision、阅读时临时改一行验证、确认后回传。因此本地 revision 本质是**待同步的临时缓冲（outbox）**，不是永久版本库。权威 revision 历史在云端。
+**语义修订（2026-07-07 决策）**：本节原定位是"待同步的临时缓冲（outbox）"。`.kmdwork` 调研（[`r3-d-local-import-research.md`](r3-d-local-import-research.md) §6.10、§6.12）确立 revision 走提交（commit）模型后，"待同步 outbox"与"可携带的 revision 历史"应是同一模型——所谓待同步，就是**本地领先的提交**。因此 `local_revisions` 从一开始就按本地提交建 schema，不再另设 outbox 概念。
+
+原 2026-06-19 的场景定位（作者预览纠错 / 审阅者上架评审，改完同步云端）仍然成立，只是重新解释为：每次确认的修改产生一个本地提交；同步 = 把本地领先的提交推送云端；云端保存作品完整提交历史，仍是权威。
 
 ```text
-LocalRevision
-  ├─ id: String（主键，"localrev-{uuid}"）
+LocalRevision（本地提交）
+  ├─ id: String（主键，"rev-{uuid}"，本地提交身份）
   ├─ workId: String（外键 → local_library.workId，CASCADE）
-  ├─ baseRevisionId: String（基于哪个云端 revision 改的）
-  ├─ source: String（修改后的完整 .kmd 源文本）
-  ├─ label: String?（用户给这个改动起的备注名）
-  ├─ synced: Boolean（false = 待同步，true = 已推送云端）
-  ├─ cloudRevisionId: String?（同步成功后云端的 revisionId）
-  ├─ createdAt: Long
-  └─ updatedAt: Long
+  ├─ parentRevisionId: String?（父提交：上一个本地提交 id，或 origin 云端 revisionId；首个提交可为 null）
+  ├─ contentHash: String（source 内容哈希；去重与本地/云端关联用，不作唯一身份）
+  ├─ sourcePath: String（指向 filesDir/bundles/<bundleId>/revisions/<revId>.kmd 的全量快照；source 不内联 Room——2026-07-08 采纳 spike §6.4）
+  ├─ storageMode: String（恒 "full"；diff 模型预留位，未来切换不破坏 schema）
+  ├─ message: String?（提交说明）
+  ├─ syncState: String（"local" = 本地领先 / "synced" = 已推送云端）
+  ├─ remoteRevisionId: String?（推送成功后云端 revisionId，origin mapping）
+  └─ createdAt: Long（提交不可变，无 updatedAt）
 ```
 
-**播放优先级**：`getWorkSource(workId)` 改为：最新未同步的 LocalRevision.source → 否则云端 activeRevision → 否则原始 kmdSource。这样用户改一行后立即能预览效果。
+与原 outbox schema 的差异：`baseRevisionId` → `parentRevisionId`（从"基于哪个云端版本"泛化为提交父指针，本地提交可以链式相接）；`label` → `message`；`synced: Boolean` → `syncState`；新增 `contentHash`；删去 `updatedAt`（提交不可变，修改即新提交）。
+
+**播放优先级**（语义不变，措辞按提交模型）：`getWorkSource(workId)` = 最新本地提交的 source（无论 syncState——最新提交即最新可播放版本）→ 否则云端 activeRevision → 否则原始 kmdSource。书架/播放始终展示最新提交；`.kmdwork` 的导出规则（导出时自动提交，export snapshot ≡ 最新提交，见调研稿 §6.12）保证这一视图跨导入导出一致。
+
+**对 R3-A 已交付实体的影响**：`LocalRevisionEntity` 已按旧 outbox schema 建表（migration 2→3），但仍处"仅接口预留"阶段、无生产写入路径。schema 修订与 R3-D1 的 `LocalLibraryEntity` 指针字段**合并为同一次 migration 3→4**（少一次迁移）；现在是改 schema 代价最小的窗口。
 
 **R3 范围（仅接口预留）**：
-- 建表 + DAO + Repository 接口（CRUD + getActiveLocalRevision）
+- schema 修订 + DAO + Repository 接口（CRUD + getLatestRevision + 按 contentHash 查找）
 - 播放链路优先读取（getWorkSource 改造）
 - **不做**编辑 UI（源文本编辑器是重度工作，留后续切片）
-- **不做**diff 视图、revision 历史浏览、云端同步链路（依赖云端 revisions API + 协作体系）
+- **不做**diff 视图、revision 历史浏览 UI、云端同步链路（依赖云端 revisions API + 协作体系）
 
 ### 2.8 local_annotations（行级，R3 范围内预留，视精力实现）
 
@@ -429,16 +440,53 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 
 > 注意：fake 不能用 `Mutex`/`synchronized` 包裹 `gate.await()`——挂起时持锁会让 B 的查询一并阻塞，把竞态窗口塌缩掉。UnconfinedTestDispatcher 单线程且无抢占，普通 Boolean 标志位即可安全区分“第一次调用”。
 
-### R3-D. 本地导入
-- 扩展 frontmatter 解析器
-- SAF 文件选择
-- 导入 → LocalLibraryEntry（onShelf=true, kmdSource 全文）
+### R3-D. 本地导入（2026-07-08 扩写）
 
-### R3-E. 本地轻度更改（仅存储 + 播放链路，不做编辑 UI）
-- local_revisions 表的 Repository 接口（CRUD + getActiveLocalRevision）
-- 播放链路改造：`getWorkSource(workId)` 优先读最新未同步 LocalRevision.source → 否则云端 → 否则原始 kmdSource
-- **不做**编辑 UI、diff 视图、revision 历史、云端同步链路
-- 接口为后续（作者纠错 / 审阅者评审 + 云端 revisions）预留
+> **决策记录（2026-07-08）**：采纳 [`r3-d-storage-spike.md`](r3-d-storage-spike.md) §7 推荐汇总表**全表**——
+> 存储分层方案 C（`filesDir/bundles/` 权威 + `cacheDir/runtime-extract/` 播放 cache + Room 轻量索引）、
+> SAF 复制导入（不留持久权限）、asset host 两步走、zip Z1–Z9 防护、revision 全量 snapshot + 文件指针。
+> **前置已清**：frontmatter 收敛（主仓库 `docs/knowledge/language/frontmatter-schema.md` + editorStore 写回修复）；
+> 存储技术调研（spike）。早期现状勘察与问题清账见 [`r3-d-local-import-research.md`](r3-d-local-import-research.md)。
+
+#### R3-D1. 数据层扩展（与 R3-E schema 修订合并为一次 migration 3→4）
+- `LocalLibraryEntity` 加指针字段：`bundleId` / `activeRevisionId` / `contentHash` / `originWorkId`（spike §2.5；只加指针/快照，不内联全量——C4 红线）
+- `LocalRevisionEntity` 按 §2.7 提交模型修订（`parentRevisionId` / `contentHash` / `message` / `syncState` / `remoteRevisionId` / `sourcePath` 指针 / `storageMode` 恒 `"full"`）
+- 同一 `Migration(3, 4)` 完成两组变更；迁移测试对齐 R3-A 模式（`MIGRATION_3_4` internal 可见）
+
+#### R3-D2. `.kmdwork` unpacker + bundle store
+- `ZipInputStream` 流式解压 + Z1–Z9 防护清单全量（spike §5.2；上限常量 50MB / 10MB / 1024 entries；API 28/29 手动 zip slip 防御）
+- 写入 `filesDir/bundles/<bundleId>/`（`work.json` + `scripts/` + `assets/` + 可选 `original.kmdwork` 备份，默认保留、空间紧张可清）
+- `work.json` 校验（Z8 引用闭合）+ contentHash 校验（Z5），失败拒绝导入并清理半解文件
+- 清理策略接线（spike §2.4：导入清旧 cache / 删作品删三处 / `onTrimMemory` 清 cache / 启动孤儿扫描）
+
+#### R3-D3. SAF 导入 + 书架
+- `ACTION_OPEN_DOCUMENT`，`type="*/*"` + `EXTRA_MIME_TYPES`（zip 双 MIME + text/plain + text/markdown）；导入后读 magic bytes（`PK\x03\x04`）判 `.kmdwork` vs 裸 `.kmd`
+- 复制进私有目录；**不调** `takePersistableUriPermission`；`contentUri` 存原始 SAF Uri 仅作来源记录（访问 try-catch 兜底）
+- 双格式路径：裸 `.kmd` 走 `kmdSource` 快捷路径（§2.3/§2.5 保留）；`.kmdwork` 走 bundle store，`kmdSource` 留 null
+- `KmdSourceMetadataParser` 扩展：title / author / speed；mode 按主仓库 `frontmatter-schema.md`（`paged` → `page` 归一化；`interactive` 降级 `stage` + 诊断）
+- 生成 `LocalLibraryEntry`（`onShelf=true, importedAt=now, bundleId` 指针）→ 书架
+- `ImportDesk` 真实接线（替换 mock；`OpenImportPicker` effect 的 no-op collector 补实现）
+
+#### R3-D4. 播放接线（asset host + source 分支）
+- `getWorkSource(workId)` 加分支：`bundleId != null` → 从 bundle store 读（最新提交优先，对齐 §2.7 播放优先级）
+- `shouldInterceptRequest` 扩展新 host `kmd-reader-assets.local`，从 `cacheDir/runtime-extract/<bundleId>/` 服务（spike §4.3 第一步；`WebViewAssetLoader` 迁移留 R3 后）
+- `assetManifest.baseUrl` 改写为 `https://kmd-reader-assets.local/<bundleId>/`，改写后的 manifest 由展开层持久化（spike §4.6 倾向，已采纳）
+- **补 mapper 的 fonts 透传**：现状 `toReaderRuntimeAssetManifest`（`ReaderRuntimeMappers.kt:5-14`）丢弃 `fonts`，bundle 自带字体到不了 FontFace，必须修
+- 展开层：load 前 ensure `cacheDir/runtime-extract/<bundleId>/` 存在（从 bundle store 解压/复制）
+- 接线点：`KmdReaderViewModel.kt:188-231` / `ReaderRuntimeMappers.kt:5-14` / `ReaderRuntimeHost.kt:290-310`
+
+#### 主仓库核实结论（2026-07-08，关闭 spike §4.6 第一开放项）
+- runtime 字体全部经原生 **FontFace API** 加载（主仓库 `core/App.ts:290-298`），URL 由 `RuntimeAssetPolicy.resolveRuntimeAssetUrl` 按 `assetManifest.baseUrl` 解析；FontFace 的 `url()` 请求走 WebView 资源加载管线，**可被 `shouldInterceptRequest` 拦截**——现有 runtime 随包字体正是这样经 `kmd-reader-runtime.local` 加载的（`reader-runtime-web-bundle.md`）。
+- FontFace 注册成功后不再重复走 Pixi `Assets.load`；Android WebView 下无宿主 fonts 清单时跳过 20MB+ 默认字体（`kmdLoadDefaultFonts=1` 可强制）——bundle 自带字体经 `assetManifest.fonts → collectRuntimeFonts → FontFace`，主仓库链路已就绪，Android 侧只欠 D4 的 fonts 透传。
+- `assetManifest.assets`（图片/shader/audio）是契约占位，core 当前无消费点（无 `bg`/图片指令）——D4 无需覆盖；未来图片指令经 Pixi `Assets.load`（fetch/Image），同样可拦截。
+- `resolveControlledSourceUrl` 安全门要求 https 或 baseUrl 内——`https://kmd-reader-assets.local/<bundleId>/` 满足。
+
+### R3-E. 本地提交（仅存储 + 播放链路，不做编辑 UI）
+- local_revisions schema 修订为提交模型（§2.7；migration 3→4 已并入 R3-D1，一次迁移完成两组变更）
+- Repository 接口（CRUD + getLatestRevision + 按 contentHash 查找）
+- 播放链路改造：`getWorkSource(workId)` 优先读最新本地提交 → 否则云端 activeRevision → 否则原始 kmdSource
+- **不做**编辑 UI、diff 视图、revision 历史 UI、云端同步链路
+- 接口为后续（作者纠错 / 审阅者评审 + `.kmdwork` revision manifest + 云端 revisions）预留
 
 ### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）
 - MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null）
@@ -472,7 +520,7 @@ R3-A 数据层（entry + revision + drafts [+ annotation]，无依赖）
   ├─→ R3-B 进度持久化
   ├─→ R3-C issue 草稿本地缓冲
   ├─→ R3-D 本地导入
-  ├─→ R3-E 本地轻度更改（存储+播放链路）
+  ├─→ R3-E 本地提交（存储+播放链路）
   ├─→ R3-F 书架 UI（含设置入口）
   │    └─→ R3-G 加入书架
   ├─→ R3-H 详情页继续阅读按钮态（依赖 B 的进度）
@@ -487,6 +535,7 @@ I（设置）独立无依赖，可与 D/E/F 并行。
 
 **完整本地阅读器标准（拔掉网线可用）：**
 - 导入本地 `.kmd` → 出现在书架 → 可阅读播放。
+- 导入 `.kmdwork`（含自带字体等资产）→ 出现在书架 → 可播放，资产经 `kmd-reader-assets.local` 虚拟 host 加载；zip 安全校验失败的包被拒绝且不留半解文件。
 - 社区/mock 作品阅读后 → 阅读历史显示 + 进度恢复。
 - 播放到中段退出 → 重新进入 → 恢复进度。
 - 详情页有进度时显示「继续阅读」+ 位置摘要。
@@ -494,7 +543,7 @@ I（设置）独立无依赖，可与 D/E/F 并行。
 - 书架（主动收藏）和阅读历史（读过）分离展示，书架有设置入口。
 - 书架空状态友好。
 - 设置页可调字号/主题/自动保存/reducedMotion，偏好持久化，阅读时生效。
-- 本地轻度更改：有未同步 revision 时播放优先读取它（接口验证，无编辑 UI）。
+- 本地提交：有本地提交时播放优先读取最新提交（接口验证，无编辑 UI）。
 - （若实现 J）阅读中可加笔记/书签，companion 可查看。
 - `./gradlew :app:testDebugUnitTest` + `assembleDebug` 通过。
 - 不崩溃（mock 作品进度/issue 写入绕过外键陷阱）。
@@ -506,7 +555,7 @@ I（设置）独立无依赖，可与 D/E/F 并行。
 - 不做多设备同步。
 - 不重构 WorkRepository（社区发现链路保持不变）。
 - 不把 mock 作品写入 works 表（保持 mock 在内存）。
-- **不做本地轻度更改的编辑 UI**——留后续切片；R3 只留存储接口 + 播放优先读取链路。
+- **不做本地提交的编辑 UI**——留后续切片；R3 只留存储接口 + 播放优先读取链路。
 - **不做云端 revision 同步链路**——R4 范畴。
 - **不做 discussion/评论**——R4 范畴（社区事实走 API）。
 - **不做 review 提交链路**——R4 范畴。
