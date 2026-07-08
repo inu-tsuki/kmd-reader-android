@@ -1403,8 +1403,12 @@ private class ControllableLocalLibraryRepository(
     override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
         delegate.setOnShelf(workId, onShelf)
     override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
-    override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
-        delegate.getActiveLocalRevision(workId)
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        delegate.getLatestRevision(workId)
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        delegate.findRevisionByContentHash(workId, contentHash)
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        delegate.getRevisionsForWork(workId)
     override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
     override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
     override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)

@@ -24,5 +24,10 @@ data class LocalLibraryEntity(
     val readingDurationMs: Long?,
     val lastReadAt: Long?,
     val importedAt: Long?,
-    val cachedAt: Long?
+    val cachedAt: Long?,
+    // R3-D1 指针字段（spike §2.5；只加指针/快照，不内联全量——C4 红线）：
+    val bundleId: String? = null,          // 指向 filesDir/bundles/<bundleId>/；本地导入必填，社区/mock 为 null
+    val activeRevisionId: String? = null,   // 指向最新本地提交（local_revisions.id）
+    val contentHash: String? = null,        // 最新提交的 contentHash；去重/快速比对
+    val originWorkId: String? = null         // 云端 workId（origin mapping，不作本地身份，B8）
 )

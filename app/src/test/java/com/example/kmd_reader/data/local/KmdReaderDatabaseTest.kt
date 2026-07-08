@@ -159,6 +159,23 @@ class KmdReaderDatabaseTest {
         cachedAt = null
     )
 
+    // commit-model revision 构造 helper（§2.7）
+    private fun revisionEntity(
+        id: String,
+        workId: String,
+        parentRevisionId: String? = null,
+        contentHash: String = "sha256-$id",
+        createdAt: Long = 1L,
+        syncState: String = "local",
+        message: String? = null
+    ) = LocalRevisionEntity(
+        id = id, workId = workId, parentRevisionId = parentRevisionId,
+        contentHash = contentHash,
+        sourcePath = "bundles/bundle-uuid-1/revisions/$id.kmd",
+        storageMode = "full", message = message, syncState = syncState,
+        remoteRevisionId = null, createdAt = createdAt
+    )
+
     @Test
     fun libraryShelfReturnsOnlyOnShelfEntries() = runTest {
         libraryDao.upsert(libraryEntry("rain-city", onShelf = true, importedAt = 100L))
@@ -194,42 +211,23 @@ class KmdReaderDatabaseTest {
     // ── local_revisions ──
 
     @Test
-    fun revisionGetActiveReturnsLatestUnsynced() = runTest {
+    fun revisionGetLatestReturnsNewestCommit() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(
-            LocalRevisionEntity(
-                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
-                source = "---\nmode: stage\n---\nold", label = null,
-                synced = true, cloudRevisionId = "cloud-1", createdAt = 1L, updatedAt = 1L
-            )
-        )
-        revisionDao.upsert(
-            LocalRevisionEntity(
-                id = "rev-2", workId = "rain-city", baseRevisionId = "base",
-                source = "---\nmode: stage\n---\nnew", label = null,
-                synced = false, cloudRevisionId = null, createdAt = 2L, updatedAt = 5L
-            )
-        )
+        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 1L))
+        revisionDao.upsert(revisionEntity(id = "rev-2", workId = "rain-city", createdAt = 5L))
 
-        val active = requireNotNull(revisionDao.getActiveLocalRevision("rain-city"))
+        val active = requireNotNull(revisionDao.getLatestRevision("rain-city"))
         assertEquals("rev-2", active.id)
-        assertEquals(false, active.synced)
     }
 
     @Test
     fun revisionCascadeDeleteWhenLibraryEntryRemoved() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(
-            LocalRevisionEntity(
-                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
-                source = "src", label = null, synced = false, cloudRevisionId = null,
-                createdAt = 1L, updatedAt = 1L
-            )
-        )
+        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city"))
 
         libraryDao.deleteByWorkId("rain-city")
 
-        assertNull(revisionDao.getActiveLocalRevision("rain-city"))
+        assertNull(revisionDao.getLatestRevision("rain-city"))
     }
 
     // ── local_drafts ──
@@ -262,19 +260,13 @@ class KmdReaderDatabaseTest {
     @Test
     fun libraryUpsertDoesNotCascadeDeleteRevisions() = runTest {
         libraryDao.upsert(libraryEntry("rain-city", progress = 0f))
-        revisionDao.upsert(
-            LocalRevisionEntity(
-                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
-                source = "src", label = null, synced = false, cloudRevisionId = null,
-                createdAt = 1L, updatedAt = 1L
-            )
-        )
+        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city"))
 
         // 模拟 updateProgress：read-modify-upsert 路径
         val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
         libraryDao.upsert(existing.copy(readingProgress = 0.7f, lastReadAt = 999L))
 
-        val savedRevision = revisionDao.getActiveLocalRevision("rain-city")
+        val savedRevision = revisionDao.getLatestRevision("rain-city")
         assertNotNull("revision must survive a library upsert", savedRevision)
         assertEquals("rev-1", savedRevision?.id)
     }
@@ -297,17 +289,11 @@ class KmdReaderDatabaseTest {
     @Test
     fun revisionUpsertThenClearForWorkEmptiesRevisions() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(
-            LocalRevisionEntity(
-                id = "rev-1", workId = "rain-city", baseRevisionId = "base",
-                source = "src", label = "本地改", synced = false, cloudRevisionId = null,
-                createdAt = 1L, updatedAt = 1L
-            )
-        )
-        assertNotNull(revisionDao.getActiveLocalRevision("rain-city"))
+        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city", message = "本地改"))
+        assertNotNull(revisionDao.getLatestRevision("rain-city"))
 
         revisionDao.clearForWork("rain-city")
 
-        assertNull(revisionDao.getActiveLocalRevision("rain-city"))
+        assertNull(revisionDao.getLatestRevision("rain-city"))
     }
 }
