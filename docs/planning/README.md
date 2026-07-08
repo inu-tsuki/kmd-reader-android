@@ -23,3 +23,8 @@
 - [第二阶段计划](stages/stage-2-plan.md)
 - [第三阶段数据与网络规划](stages/stage-3-data-network-plan.md)
 - [第五阶段集成测试报告](stages/stage-5-integration-test-report.md)
+
+## R3 工作包文档
+
+- [R3 完善本地阅读器规划](r3-local-reader-plan.md)
+- [R3-D 本地导入调研与方案讨论](r3-d-local-import-research.md)（调研稿，未定论：frontmatter drift 核实、`.kmdwork` 打包格式选项、待拍板问题）
