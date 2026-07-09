@@ -7,6 +7,9 @@ import androidx.room.Query
 
 @Dao
 interface LocalRevisionDao {
+    // 提交不可变：用 ABORT 而非 REPLACE——重复 id 写入应抛冲突异常，
+    // 强制调用方生成新 id（append-only，r3-local-reader-plan.md §2.7）。
+    // Room 无子表依赖，ABORT 不触发级联问题。
     // 最新提交 = 最新可播放版本，无论 syncState（本地领先也算最新可播放）。
     // 对齐 r3-local-reader-plan.md §2.7 播放优先级。
     @Query("SELECT * FROM local_revisions WHERE workId = :workId ORDER BY createdAt DESC LIMIT 1")
@@ -18,9 +21,9 @@ interface LocalRevisionDao {
     @Query("SELECT * FROM local_revisions WHERE workId = :workId ORDER BY createdAt DESC")
     suspend fun getRevisionsForWork(workId: String): List<LocalRevisionEntity>
 
-    // @Insert(REPLACE) 保留：revisions 无子表，REPLACE 不触发级联删；提交不可变语义由调用方保证。
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entity: LocalRevisionEntity)
+    // append-only：ABORT 意味着同 id 重复 insert 抛异常，不静默覆写。
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(entity: LocalRevisionEntity)
 
     @Query("DELETE FROM local_revisions WHERE workId = :workId")
     suspend fun clearForWork(workId: String)

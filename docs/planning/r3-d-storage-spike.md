@@ -366,7 +366,7 @@ fun extractKmdwork(
 
 Room 存 vs 文件系统存：
 - Room 内联（`LocalRevisionEntity.source: String`）：单作品最坏 5MB 进 DB；Room 单行 blob 上限 1MB（SQLite BLOB 常见限制，但 SQLite 实际支持到 ~1GB），5MB 会跨多行或触发 cursor 限制。**不推荐 Room 内联**。
-- 文件系统 + Room 指针（对齐 §2.3 `filesDir/bundles/<bundleId>/revisions/<revId>.kmd`）：Room 只存 `LocalRevision` 索引（`id`/`parentRevisionId`/`contentHash`/`message`/`syncState`/`remoteRevisionId`/`createdAt` + `sourcePath` 指针），source 全文落文件系统。
+- 文件系统 + Room 指针（对齐 §2.3：`sourcePath` 是 filesDir 下相对路径；bundle 作品可落 `bundles/<bundleId>/revisions/<revId>.kmd`，裸 `.kmd` 落独立 local revision 根）：Room 只存 `LocalRevision` 索引（`id`/`parentRevisionId`/`contentHash`/`message`/`syncState`/`remoteRevisionId`/`createdAt` + `sourcePath` 指针），source 全文落文件系统。
 
 ### 6.2 量化阈值建议
 
@@ -387,7 +387,7 @@ Room 存 vs 文件系统存：
 
 ### 6.4 推荐
 
-- **R3 全量 snapshot**，source 落 `filesDir/bundles/<bundleId>/revisions/<revId>.kmd`，Room `LocalRevisionEntity` 加 `sourcePath: String` 指针，**不内联 source 文本**。
+- **R3 全量 snapshot**，source 落 filesDir 下、由 Room `LocalRevisionEntity.sourcePath: String` 保存相对指针，**不内联 source 文本**。`.kmdwork` / `bundleId != null` 使用 `bundles/<bundleId>/revisions/<revId>.kmd`；裸 `.kmd` / `bundleId == null` 使用 `local-revisions/<workKey>/revisions/<revId>.kmd`，`workKey` 必须是由 `workId` 派生的安全单路径段（hash/UUID 均可）。
 - 在 `LocalRevisionEntity` 预留 `storageMode: String` 字段（`"full"` / `"diff"`），R3 恒 `"full"`，未来切 diff 不破坏 schema。
 - 阈值监控：导入/提交时累计单作品 revision 总体积，超 10MB 记 warning log（不阻塞），供后续决策。
 - diff 模型的具体格式（unified diff / chunk delta / git packfile 风格）**不在 R3 定**，留 `work-bundle-format.md` §6 开放项与 R3 后 revision store 切片。

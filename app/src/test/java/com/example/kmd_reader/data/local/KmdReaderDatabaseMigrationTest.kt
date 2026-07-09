@@ -85,7 +85,7 @@ class KmdReaderDatabaseMigrationTest {
                     lastReadAt = null, importedAt = 10L, cachedAt = null
                 )
             )
-            revisionDao.upsert(
+            revisionDao.insert(
                 LocalRevisionEntity(
                     id = "rev-1", workId = "rain-city", parentRevisionId = null,
                     contentHash = "sha256-rev-1",
@@ -180,7 +180,7 @@ class KmdReaderDatabaseMigrationTest {
             assertNull("revisions should be empty after table rebuild", revisionDao.getLatestRevision("rain-city"))
 
             // 写 commit-model 行
-            revisionDao.upsert(
+            revisionDao.insert(
                 LocalRevisionEntity(
                     id = "rev-local-1", workId = "rain-city",
                     parentRevisionId = null,
@@ -193,7 +193,7 @@ class KmdReaderDatabaseMigrationTest {
                     createdAt = 100L
                 )
             )
-            revisionDao.upsert(
+            revisionDao.insert(
                 LocalRevisionEntity(
                     id = "rev-local-2", workId = "rain-city",
                     parentRevisionId = "rev-local-1",
