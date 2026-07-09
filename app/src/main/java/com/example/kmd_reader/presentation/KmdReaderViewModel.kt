@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.kmd_reader.data.MockWorkRepository
 import com.example.kmd_reader.data.WorkRepository
+import com.example.kmd_reader.data.bundle.BundleStore
+import com.example.kmd_reader.data.bundle.KmdworkUnpackException
 import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
 import com.example.kmd_reader.data.repository.LocalDraft
 import com.example.kmd_reader.data.repository.LocalDraftTypes
@@ -12,8 +14,11 @@ import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.domain.kmd.KmdSourceMetadataParser
 import com.example.kmd_reader.domain.model.IssueSource
+import com.example.kmd_reader.domain.model.KmdImportMetadata
 import com.example.kmd_reader.domain.model.KmdSourceSnapshot
+import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.ScriptIssue
+import com.example.kmd_reader.domain.model.WorkSourceType
 import com.example.kmd_reader.domain.policy.DeskStackPolicy
 import com.example.kmd_reader.domain.policy.ReaderViewportPolicy
 import com.example.kmd_reader.runtime.FakeReaderRuntimeBridge
@@ -36,7 +41,12 @@ class KmdReaderViewModel(
     private val repository: WorkRepository = MockWorkRepository(),
     private val runtimeBridge: ReaderRuntimeBridge = FakeReaderRuntimeBridge(),
     private val nowMillis: () -> Long = System::currentTimeMillis,
-    private val localLibrary: LocalLibraryRepository = InMemoryLocalLibraryRepository()
+    private val localLibrary: LocalLibraryRepository = InMemoryLocalLibraryRepository(),
+    private val bundleStore: BundleStore = BundleStore(
+        java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-bundles"),
+        java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-cache")
+    ),
+    private val appContext: android.content.Context? = null
 ) : ViewModel() {
     val runtimeBridgeForHost: ReaderRuntimeBridge
         get() = runtimeBridge
@@ -121,6 +131,8 @@ class KmdReaderViewModel(
                 reduce(action)
                 sendEffect(KmdReaderEffect.OpenImportPicker)
             }
+            is KmdReaderAction.ImportFromUri -> importFromUri(action.uri)
+            KmdReaderAction.CancelImport -> reduce(action)
             else -> reduce(action)
         }
     }
@@ -133,6 +145,125 @@ class KmdReaderViewModel(
     private fun retryReaderRuntime() {
         reduce(KmdReaderAction.RetryReaderRuntime)
         loadCurrentReaderWork()
+    }
+
+    // ── R3-D3 本地导入 ──
+
+    private fun importFromUri(uri: android.net.Uri) {
+        val ctx = appContext
+        if (ctx == null) {
+            reduce(KmdReaderAction.ImportFailed("导入需要应用上下文"))
+            return
+        }
+        reduce(KmdReaderAction.ImportFromUri(uri))
+        viewModelScope.launch {
+            try {
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw java.io.IOException("无法读取文件")
+                // 读 magic bytes 判断 zip vs 纯文本
+                val isZip = bytes.size >= 4 &&
+                    bytes[0] == 0x50.toByte() &&  // P
+                    bytes[1] == 0x4B.toByte() &&  // K
+                    bytes[2] == 0x03.toByte() &&
+                    bytes[3] == 0x04.toByte()
+
+                if (isZip) {
+                    importKmdwork(bytes, uri)
+                } else {
+                    importPlainKmd(bytes, uri)
+                }
+            } catch (e: KmdworkUnpackException) {
+                reduce(KmdReaderAction.ImportFailed("导入失败：${e.message}"))
+            } catch (e: Exception) {
+                reduce(KmdReaderAction.ImportFailed("导入失败：${e.message ?: e::class.simpleName}"))
+            }
+        }
+    }
+
+    private suspend fun importKmdwork(bytes: ByteArray, uri: android.net.Uri) {
+        val result = bundleStore.importBundle(java.io.ByteArrayInputStream(bytes))
+        val manifest = result.manifest
+        val entrySource = result.entrySource
+
+        // 从 manifest 提取 metadata；fallback 从 entrySource frontmatter
+        val importMeta = KmdSourceMetadataParser.parseImportMetadata(entrySource)
+        val title = manifest.communitySnapshot?.title
+            ?: importMeta.title
+            ?: "导入作品"
+        val author = manifest.communitySnapshot?.authorName ?: importMeta.author ?: ""
+        val presentationMode = manifest.presentation?.mode?.let { normalizeMode(it) }
+            ?: importMeta.hints.presentationMode
+            ?: PresentationMode.Stage
+
+        val entry = LocalLibraryEntry(
+            workId = manifest.bundleId,
+            source = WorkSourceType.Local,
+            onShelf = true,
+            title = title,
+            authorName = author,
+            presentationMode = presentationMode,
+            aspectRatio = importMeta.hints.aspectRatio ?: "",
+            kmdSource = null,
+            contentUri = uri.toString(),
+            readingProgress = 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = null,
+            importedAt = nowMillis(),
+            cachedAt = nowMillis(),
+            bundleId = manifest.bundleId,
+            activeRevisionId = manifest.exportRevisionId,
+            contentHash = result.contentHash,
+            originWorkId = manifest.origin?.workId
+        )
+        localLibrary.upsertEntry(entry)
+        reduce(KmdReaderAction.ImportSucceeded(entry.workId))
+        sendEffect(KmdReaderEffect.ShowMessage("导入成功：$title"))
+    }
+
+    private suspend fun importPlainKmd(bytes: ByteArray, uri: android.net.Uri) {
+        val sourceText = String(bytes, Charsets.UTF_8)
+        val importMeta = KmdSourceMetadataParser.parseImportMetadata(sourceText)
+        val contentHash = sha256Hex(bytes)
+        val workId = "local-${contentHash.take(8)}"
+
+        val entry = LocalLibraryEntry(
+            workId = workId,
+            source = WorkSourceType.Local,
+            onShelf = true,
+            title = importMeta.title ?: "本地脚本",
+            authorName = importMeta.author ?: "",
+            presentationMode = importMeta.hints.presentationMode ?: PresentationMode.Stage,
+            aspectRatio = importMeta.hints.aspectRatio ?: "",
+            kmdSource = sourceText,
+            contentUri = uri.toString(),
+            readingProgress = 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = null,
+            importedAt = nowMillis(),
+            cachedAt = nowMillis(),
+            bundleId = null,
+            activeRevisionId = null,
+            contentHash = contentHash,
+            originWorkId = null
+        )
+        localLibrary.upsertEntry(entry)
+        reduce(KmdReaderAction.ImportSucceeded(workId))
+        sendEffect(KmdReaderEffect.ShowMessage("导入成功：${entry.title}"))
+    }
+
+    private fun normalizeMode(raw: String): PresentationMode =
+        when (raw.trim().lowercase()) {
+            "scroll" -> PresentationMode.Scroll
+            "page", "paged" -> PresentationMode.Paged
+            "stage", "interactive" -> PresentationMode.Stage
+            else -> PresentationMode.Stage
+        }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        return buildString(digest.size * 2) { digest.forEach { append("%02x".format(it)) } }
     }
 
     private fun openReaderCompanion(action: KmdReaderAction.OpenReaderCompanion) {
@@ -972,12 +1103,14 @@ class KmdReaderViewModel(
     class Factory(
         private val repository: WorkRepository,
         private val runtimeBridge: ReaderRuntimeBridge,
-        private val localLibrary: LocalLibraryRepository
+        private val localLibrary: LocalLibraryRepository,
+        private val bundleStore: BundleStore,
+        private val appContext: android.content.Context
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(KmdReaderViewModel::class.java)) {
-                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary) as T
+                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary, bundleStore, appContext) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

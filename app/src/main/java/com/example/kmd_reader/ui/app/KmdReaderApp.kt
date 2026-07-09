@@ -1,7 +1,10 @@
 package com.example.kmd_reader.ui.app
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -25,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.kmd_reader.presentation.Desk
+import com.example.kmd_reader.presentation.ImportState
 import com.example.kmd_reader.presentation.KmdReaderAction
 import com.example.kmd_reader.presentation.KmdReaderEffect
 import com.example.kmd_reader.presentation.KmdReaderViewModel
@@ -57,6 +61,18 @@ fun KmdReaderApp(
     val latestLastIndex by rememberUpdatedState(desks.lastIndex)
     var programmaticTargetPage by remember { mutableStateOf<Int?>(null) }
 
+    // R3-D3：SAF 文件选择器。OpenDocument 支持 EXTRA_MIME_TYPES。
+    // 支持双格式：.kmdwork zip（application/zip, application/x-zip-compressed）+ 裸 .kmd（text/plain, text/markdown）
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            dispatch(KmdReaderAction.ImportFromUri(uri))
+        } else {
+            dispatch(KmdReaderAction.CancelImport)
+        }
+    }
+
     LaunchedEffect(viewModel) {
         viewModel.effectFlow.collect { effect ->
             when (effect) {
@@ -64,7 +80,14 @@ fun KmdReaderApp(
                     Toast.makeText(context, effect.message, Toast.LENGTH_SHORT).show()
                 }
                 is KmdReaderEffect.LoadRuntime -> Unit
-                KmdReaderEffect.OpenImportPicker -> Unit
+                KmdReaderEffect.OpenImportPicker -> {
+                    importLauncher.launch(arrayOf(
+                        "application/zip",
+                        "application/x-zip-compressed",
+                        "text/plain",
+                        "text/markdown"
+                    ))
+                }
             }
         }
     }
@@ -223,7 +246,15 @@ fun KmdReaderApp(
                         )
 
                         Desk.Import -> ImportDesk(
-                            onMockImport = { dispatch(KmdReaderAction.OpenWork(it)) }
+                            importState = state.importState,
+                            onPickFile = {
+                                importLauncher.launch(arrayOf(
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "text/plain",
+                                    "text/markdown"
+                                ))
+                            }
                         )
                     }
                 }

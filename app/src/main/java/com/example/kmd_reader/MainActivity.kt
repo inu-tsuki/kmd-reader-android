@@ -19,7 +19,9 @@ class MainActivity : ComponentActivity() {
         KmdReaderViewModel.Factory(
             repository = appContainer.workRepository,
             runtimeBridge = appContainer.readerRuntimeBridge,
-            localLibrary = appContainer.localLibraryRepository
+            localLibrary = appContainer.localLibraryRepository,
+            bundleStore = appContainer.bundleStore,
+            appContext = applicationContext
         )
     }
 

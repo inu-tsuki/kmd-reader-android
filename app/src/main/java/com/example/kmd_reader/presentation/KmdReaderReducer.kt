@@ -158,7 +158,25 @@ object KmdReaderReducer {
             )
 
             KmdReaderAction.OpenImport -> state.copy(
-                deskStack = DeskStackPolicy.openImport(state.deskStack)
+                deskStack = DeskStackPolicy.openImport(state.deskStack),
+                importState = ImportState.Idle
+            )
+
+            is KmdReaderAction.ImportFromUri -> state.copy(
+                importState = ImportState.Importing
+            )
+
+            KmdReaderAction.CancelImport -> state.copy(
+                importState = ImportState.Idle,
+                deskStack = DeskStackPolicy.closeCurrentDesk(state.deskStack)
+            )
+
+            is KmdReaderAction.ImportSucceeded -> state.copy(
+                importState = ImportState.Idle
+            )
+
+            is KmdReaderAction.ImportFailed -> state.copy(
+                importState = ImportState.Failed(action.message)
             )
 
             KmdReaderAction.CloseCurrentDesk -> state.copy(
