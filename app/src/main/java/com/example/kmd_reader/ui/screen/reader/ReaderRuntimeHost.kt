@@ -17,6 +17,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,6 +47,8 @@ import android.graphics.Color as AndroidColor
 import androidx.compose.ui.graphics.Color as ComposeColor
 
 private const val RuntimeAssetHost = "kmd-reader-runtime.local"
+// R3-D4：bundle 作品 assets 的虚拟 host，命中后从 cacheDir/<bundleId>/ 服务（spike §4.3/§4.4 第一步）。
+private const val BundleAssetHost = "kmd-reader-assets.local"
 private const val ReaderRuntimeAssetPath = "reader-runtime/index.html"
 private const val D0RuntimeAssetPath = "kmd-runtime/index.html"
 private const val RuntimeBridgeName = "KmdAndroid"
@@ -292,21 +295,34 @@ private fun WebView.configureForRuntime(
             request: WebResourceRequest
         ): WebResourceResponse? {
             val url = request.url
-            if (url.host != RuntimeAssetHost) {
-                return null
-            }
+            if (url.host == RuntimeAssetHost) {
+                val assetPath = url.path
+                    ?.removePrefix("/")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return null
 
-            val assetPath = url.path
-                ?.removePrefix("/")
-                ?.takeIf { it.isNotBlank() }
-                ?: return null
-
-            hostState.breadcrumbs.add("assetRequest path=$assetPath")
-            val response = view.context.openRuntimeAsset(assetPath)
-            if (response == null) {
-                hostState.breadcrumbs.add("assetMiss path=$assetPath")
+                hostState.breadcrumbs.add("assetRequest path=$assetPath")
+                val response = view.context.openRuntimeAsset(assetPath)
+                if (response == null) {
+                    hostState.breadcrumbs.add("assetMiss path=$assetPath")
+                }
+                return response
             }
-            return response
+            // R3-D4：bundle assets host，从 cacheDir/<bundleId>/<rest> 服务（spike §4.3 第一步）。
+            if (url.host == BundleAssetHost) {
+                val resolved = resolveBundleAssetPath(url.path) ?: run {
+                    hostState.breadcrumbs.add("bundleAssetMiss path=${url.path}")
+                    return null
+                }
+                val (bundleId, rest) = resolved
+                hostState.breadcrumbs.add("bundleAssetRequest bundleId=$bundleId rest=$rest")
+                val response = view.context.openBundleAsset(bundleId, rest)
+                if (response == null) {
+                    hostState.breadcrumbs.add("bundleAssetMiss bundleId=$bundleId rest=$rest")
+                }
+                return response
+            }
+            return null
         }
 
         override fun onReceivedError(
@@ -773,6 +789,68 @@ private fun Context.openRuntimeAsset(path: String): WebResourceResponse? {
         null
     }
     return WebResourceResponse(mimeType, encoding, stream)
+}
+
+/**
+ * R3-D4：把 bundle asset 虚拟 URL 的 path 解析成 (bundleId, rest)。
+ * path 形如 /<bundleId>/assets/fonts/x.woff2。rest 是 bundleId 之后的相对路径。
+ * 路径穿越 guard：bundleId/rest 禁止空、含 .. 或以 / 开头逃逸（cacheDir 子树内，spike §4.4）。
+ * 返回 null 表示无法解析/不安全（调用方返回 null 让 WebView 默认处理）。
+ */
+internal fun resolveBundleAssetPath(path: String?): Pair<String, String>? {
+    if (path == null) return null
+    val stripped = path.removePrefix("/")
+    if (stripped.isBlank()) return null
+    val parts = stripped.split("/", limit = 2)
+    val bundleId = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return null
+    if (bundleId.contains("..")) return null
+    val rest = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return null
+    if (rest.contains("..")) return null
+    return bundleId to rest
+}
+
+/**
+ * R3-D4：从展开缓存目录读 bundle asset 服务给 WebView（spike §4.3 第一步）。
+ * 路径：cacheDir/<BundleStoreModule.RUNTIME_EXTRACT_DIR>/<bundleId>/<rest>。
+ * 展开根与 ensureExtracted 写入位置必须一致——引用 BundleStoreModule.RUNTIME_EXTRACT_DIR
+ * 同一常量，避免两处分别硬编码导致路径错位稳定 miss（D4 审查 High）。
+ * 文件不存在返回 null（miss）。
+ */
+private fun Context.openBundleAsset(bundleId: String, rest: String): WebResourceResponse? {
+    val target = resolveBundleAssetFile(cacheDir, bundleId, rest) ?: return null
+    if (!target.exists() || !target.isFile) return null
+    val stream = runCatching { target.inputStream() }.getOrNull() ?: return null
+    val mimeType = mimeTypeForAsset(rest)
+    val encoding = if (mimeType.startsWith("text/") || mimeType == "application/json") {
+        "UTF-8"
+    } else {
+        null
+    }
+    return WebResourceResponse(mimeType, encoding, stream)
+}
+
+/**
+ * R3-D4：解析 bundle asset 在展开缓存里的目标文件（纯函数，无 Context 依赖，便于单测）。
+ * 路径根 = [cacheRoot]/<RUNTIME_EXTRACT_DIR>/<bundleId>/<rest>，与 BundleStore.ensureExtracted
+ * 写入位置对齐（ensureExtracted 的 cacheDir 字段即 cacheRoot/RUNTIME_EXTRACT_DIR）。
+ * canonical guard：解析后必须仍在展开缓存根内（防符号链接/..逃逸）。返回 null 表示不安全。
+ *
+ * 此函数是 ensureExtracted 写入 ↔ openBundleAsset 读取 的唯一接线点，专门被集成测试钉死。
+ */
+internal fun resolveBundleAssetFile(
+    cacheRoot: File,
+    bundleId: String,
+    rest: String
+): File? {
+    // 路径穿越 guard（与 resolveBundleAssetPath 同构）：rest 含 .. 可在 canonical 解析后逃逸
+    // runtime-extract 子树（如 bid/../escape → runtime-extract/escape 仍在根内却跨了 bundleId）。
+    if (bundleId.contains("..") || rest.contains("..")) return null
+    val runtimeExtractRoot = File(cacheRoot, com.example.kmd_reader.data.bundle.BundleStoreModule.RUNTIME_EXTRACT_DIR)
+    val target = File(runtimeExtractRoot, "$bundleId/$rest")
+    val canonicalTarget = runCatching { target.canonicalFile }.getOrNull() ?: return null
+    val canonicalRoot = runCatching { runtimeExtractRoot.canonicalFile }.getOrNull() ?: return null
+    if (!canonicalTarget.path.startsWith(canonicalRoot.path + File.separator)) return null
+    return canonicalTarget
 }
 
 private fun Context.runtimeMemorySnapshot(): String {

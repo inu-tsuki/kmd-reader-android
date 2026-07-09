@@ -27,20 +27,29 @@ data class LocalLibraryEntry(
     val readingDurationMs: Long?,
     val lastReadAt: Long?,
     val importedAt: Long?,
-    val cachedAt: Long?
+    val cachedAt: Long?,
+    // R3-D1 指针字段（spike §2.5；只加指针/快照，不内联全量——C4 红线）：
+    val bundleId: String? = null,
+    val activeRevisionId: String? = null,
+    val contentHash: String? = null,
+    val originWorkId: String? = null
 )
 
-/** 本地轻度更改（待同步缓冲）。 */
+/**
+ * 本地提交（commit 模型，r3-local-reader-plan.md §2.7）。
+ * 提交不可变：修改即新提交，不原地更新。同步 = 推送本地领先的提交到云端。
+ */
 data class LocalRevision(
     val id: String,
     val workId: String,
-    val baseRevisionId: String,
-    val source: String,
-    val label: String?,
-    val synced: Boolean,
-    val cloudRevisionId: String?,
-    val createdAt: Long,
-    val updatedAt: Long
+    val parentRevisionId: String?,
+    val contentHash: String,
+    val sourcePath: String,
+    val storageMode: String,
+    val message: String?,
+    val syncState: String,
+    val remoteRevisionId: String?,
+    val createdAt: Long
 )
 
 /** 通用草稿（issue/discussion/review 写到一半的内容）。 */
@@ -59,6 +68,17 @@ object LocalDraftTypes {
     const val REVIEW = "review"
 }
 
+/** 提交同步状态常量。 */
+object RevisionSyncState {
+    const val LOCAL = "local"
+    const val SYNCED = "synced"
+}
+
+/** 提交存储模式常量。R3 恒 "full"；diff 模型预留位。 */
+object RevisionStorageMode {
+    const val FULL = "full"
+}
+
 interface LocalLibraryRepository {
     // 作品级
     suspend fun getEntry(workId: String): LocalLibraryEntry?
@@ -69,8 +89,10 @@ interface LocalLibraryRepository {
     suspend fun setOnShelf(workId: String, onShelf: Boolean)
     suspend fun removeEntry(workId: String)
 
-    // 内容级
-    suspend fun getActiveLocalRevision(workId: String): LocalRevision?
+    // 提交级（commit 模型，§2.7）
+    suspend fun getLatestRevision(workId: String): LocalRevision?
+    suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision?
+    suspend fun getRevisionsForWork(workId: String): List<LocalRevision>
     suspend fun saveRevision(revision: LocalRevision)
     suspend fun clearRevisionsForWork(workId: String)
 
@@ -128,11 +150,19 @@ class RoomLocalLibraryRepository(
         libraryDao.deleteByWorkId(workId)
     }
 
-    override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
-        revisionDao.getActiveLocalRevision(workId)?.toDomain()
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        revisionDao.getLatestRevision(workId)?.toDomain()
 
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        revisionDao.findByContentHash(workId, contentHash)?.toDomain()
+
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        revisionDao.getRevisionsForWork(workId).map { it.toDomain() }
+
+    // 提交不可变：直接 upsert（同 id 覆盖，但语义上调用方应只写新 id）。
+    // 不覆写 createdAt——提交时间由调用方提供。
     override suspend fun saveRevision(revision: LocalRevision) {
-        revisionDao.upsert(revision.copy(updatedAt = nowMillis()).toEntity())
+        revisionDao.upsert(revision.toEntity())
     }
 
     override suspend fun clearRevisionsForWork(workId: String) {
@@ -192,12 +222,19 @@ class InMemoryLocalLibraryRepository(
         drafts.removeAll { it.workId == workId }
     }
 
-    override suspend fun getActiveLocalRevision(workId: String): LocalRevision? =
-        revisions.filter { it.workId == workId && !it.synced }.maxByOrNull { it.updatedAt }
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        revisions.filter { it.workId == workId }.maxByOrNull { it.createdAt }
 
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        revisions.find { it.workId == workId && it.contentHash == contentHash }
+
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        revisions.filter { it.workId == workId }.sortedByDescending { it.createdAt }
+
+    // 提交不可变：同 id 先移除再添加（保持单条），但不覆写 createdAt。
     override suspend fun saveRevision(revision: LocalRevision) {
         revisions.removeAll { it.id == revision.id }
-        revisions.add(revision.copy(updatedAt = nowMillis()))
+        revisions.add(revision)
     }
 
     override suspend fun clearRevisionsForWork(workId: String) {
@@ -235,7 +272,11 @@ private fun LocalLibraryEntity.toDomain(): LocalLibraryEntry = LocalLibraryEntry
     readingDurationMs = readingDurationMs,
     lastReadAt = lastReadAt,
     importedAt = importedAt,
-    cachedAt = cachedAt
+    cachedAt = cachedAt,
+    bundleId = bundleId,
+    activeRevisionId = activeRevisionId,
+    contentHash = contentHash,
+    originWorkId = originWorkId
 )
 
 private fun LocalLibraryEntry.toEntity(): LocalLibraryEntity = LocalLibraryEntity(
@@ -253,19 +294,25 @@ private fun LocalLibraryEntry.toEntity(): LocalLibraryEntity = LocalLibraryEntit
     readingDurationMs = readingDurationMs,
     lastReadAt = lastReadAt,
     importedAt = importedAt,
-    cachedAt = cachedAt
+    cachedAt = cachedAt,
+    bundleId = bundleId,
+    activeRevisionId = activeRevisionId,
+    contentHash = contentHash,
+    originWorkId = originWorkId
 )
 
 private fun LocalRevisionEntity.toDomain(): LocalRevision = LocalRevision(
-    id = id, workId = workId, baseRevisionId = baseRevisionId, source = source,
-    label = label, synced = synced, cloudRevisionId = cloudRevisionId,
-    createdAt = createdAt, updatedAt = updatedAt
+    id = id, workId = workId, parentRevisionId = parentRevisionId,
+    contentHash = contentHash, sourcePath = sourcePath, storageMode = storageMode,
+    message = message, syncState = syncState, remoteRevisionId = remoteRevisionId,
+    createdAt = createdAt
 )
 
 private fun LocalRevision.toEntity(): LocalRevisionEntity = LocalRevisionEntity(
-    id = id, workId = workId, baseRevisionId = baseRevisionId, source = source,
-    label = label, synced = synced, cloudRevisionId = cloudRevisionId,
-    createdAt = createdAt, updatedAt = updatedAt
+    id = id, workId = workId, parentRevisionId = parentRevisionId,
+    contentHash = contentHash, sourcePath = sourcePath, storageMode = storageMode,
+    message = message, syncState = syncState, remoteRevisionId = remoteRevisionId,
+    createdAt = createdAt
 )
 
 private fun LocalDraftEntity.toDomain(): LocalDraft = LocalDraft(

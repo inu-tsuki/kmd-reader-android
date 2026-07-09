@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LocalRevisionEntity::class,
         LocalDraftEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class KmdReaderDatabase : RoomDatabase() {
@@ -94,13 +94,49 @@ abstract class KmdReaderDatabase : RoomDatabase() {
             }
         }
 
+        // R3-D1：migration 3→4 — local_library 加 4 个指针列 + local_revisions outbox → commit 模型。
+        // 合并两组 schema 变更到一次迁移（少一次 migration），与 r3-local-reader-plan.md §2.7/§R3-D1 对齐。
+        // local_revisions 是纯接口预留（无生产写入路径），旧表 DROP+重建不丢用户数据。
+        internal val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ── local_library：加 4 个 nullable 指针列（ALTER TABLE ADD COLUMN 对 nullable 列可行）──
+                db.execSQL("ALTER TABLE `local_library` ADD COLUMN `bundleId` TEXT")
+                db.execSQL("ALTER TABLE `local_library` ADD COLUMN `activeRevisionId` TEXT")
+                db.execSQL("ALTER TABLE `local_library` ADD COLUMN `contentHash` TEXT")
+                db.execSQL("ALTER TABLE `local_library` ADD COLUMN `originWorkId` TEXT")
+
+                // ── local_revisions：outbox → commit 模型（破坏性 schema 变更，重建表）──
+                // 旧表无生产写入路径（仅接口预留），直接 DROP 重建；不尝试迁移旧 outbox 行。
+                db.execSQL("DROP TABLE IF EXISTS `local_revisions`")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `local_revisions` (
+                        `id` TEXT NOT NULL,
+                        `workId` TEXT NOT NULL,
+                        `parentRevisionId` TEXT,
+                        `contentHash` TEXT NOT NULL,
+                        `sourcePath` TEXT NOT NULL,
+                        `storageMode` TEXT NOT NULL,
+                        `message` TEXT,
+                        `syncState` TEXT NOT NULL,
+                        `remoteRevisionId` TEXT,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`),
+                        FOREIGN KEY(`workId`) REFERENCES `local_library`(`workId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_revisions_workId` ON `local_revisions` (`workId`)")
+            }
+        }
+
         fun create(context: Context): KmdReaderDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 KmdReaderDatabase::class.java,
                 DatabaseName
             )
-                .addMigrations(MIGRATION_2_3)
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
         }

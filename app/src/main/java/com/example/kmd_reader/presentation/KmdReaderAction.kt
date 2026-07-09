@@ -26,6 +26,14 @@ sealed interface KmdReaderAction {
     data object CloseReaderCompanion : KmdReaderAction
     data object ToggleReaderCompanionExpanded : KmdReaderAction
     data object OpenImport : KmdReaderAction
+    /** R3-D3：SAF picker 选中文件后，携带 Uri 交给 VM 执行导入。 */
+    data class ImportFromUri(val uri: android.net.Uri) : KmdReaderAction
+    /** R3-D3：picker 取消或导入失败后重置状态。 */
+    data object CancelImport : KmdReaderAction
+    /** R3-D3 内部 action：导入成功后 VM 回写结果（保持 reducer 纯函数）。 */
+    data class ImportSucceeded(val workId: String) : KmdReaderAction
+    /** R3-D3 内部 action：导入失败后 VM 回写错误信息。 */
+    data class ImportFailed(val message: String) : KmdReaderAction
     data object CloseCurrentDesk : KmdReaderAction
     data class SetActiveDesk(val index: Int) : KmdReaderAction
     data object OpenSearch : KmdReaderAction

@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.kmd_reader.data.MockWorkRepository
 import com.example.kmd_reader.data.WorkRepository
+import com.example.kmd_reader.data.bundle.BundleStore
+import com.example.kmd_reader.data.bundle.KmdworkUnpackException
 import com.example.kmd_reader.data.repository.InMemoryLocalLibraryRepository
 import com.example.kmd_reader.data.repository.LocalDraft
 import com.example.kmd_reader.data.repository.LocalDraftTypes
@@ -12,8 +14,11 @@ import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.domain.kmd.KmdSourceMetadataParser
 import com.example.kmd_reader.domain.model.IssueSource
+import com.example.kmd_reader.domain.model.KmdImportMetadata
 import com.example.kmd_reader.domain.model.KmdSourceSnapshot
+import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.ScriptIssue
+import com.example.kmd_reader.domain.model.WorkSourceType
 import com.example.kmd_reader.domain.policy.DeskStackPolicy
 import com.example.kmd_reader.domain.policy.ReaderViewportPolicy
 import com.example.kmd_reader.runtime.FakeReaderRuntimeBridge
@@ -30,13 +35,19 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class KmdReaderViewModel(
     private val repository: WorkRepository = MockWorkRepository(),
     private val runtimeBridge: ReaderRuntimeBridge = FakeReaderRuntimeBridge(),
     private val nowMillis: () -> Long = System::currentTimeMillis,
-    private val localLibrary: LocalLibraryRepository = InMemoryLocalLibraryRepository()
+    private val localLibrary: LocalLibraryRepository = InMemoryLocalLibraryRepository(),
+    private val bundleStore: BundleStore = BundleStore(
+        java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-bundles"),
+        java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-cache")
+    ),
+    private val appContext: android.content.Context? = null
 ) : ViewModel() {
     val runtimeBridgeForHost: ReaderRuntimeBridge
         get() = runtimeBridge
@@ -62,6 +73,8 @@ class KmdReaderViewModel(
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
         // 草稿落盘节流间隔。草稿比进度更敏感（用户逐字编辑），1s 窗口 + onCleared 兜底。
         private const val DRAFT_SAVE_INTERVAL_MS = 1_000L
+        // 裸 .kmd 纯文本最大大小（与 unpacker 单 entry 上限一致）
+        private const val MAX_PLAIN_KMD_BYTES = 10L * 1024 * 1024  // 10MB
     }
 
     init {
@@ -121,6 +134,8 @@ class KmdReaderViewModel(
                 reduce(action)
                 sendEffect(KmdReaderEffect.OpenImportPicker)
             }
+            is KmdReaderAction.ImportFromUri -> importFromUri(action.uri)
+            KmdReaderAction.CancelImport -> reduce(action)
             else -> reduce(action)
         }
     }
@@ -133,6 +148,158 @@ class KmdReaderViewModel(
     private fun retryReaderRuntime() {
         reduce(KmdReaderAction.RetryReaderRuntime)
         loadCurrentReaderWork()
+    }
+
+    // ── R3-D3 本地导入 ──
+
+    private fun importFromUri(uri: android.net.Uri) {
+        val ctx = appContext
+        if (ctx == null) {
+            reduce(KmdReaderAction.ImportFailed("导入需要应用上下文"))
+            return
+        }
+        reduce(KmdReaderAction.ImportFromUri(uri))
+        viewModelScope.launch {
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // peek magic bytes（只读前 4 字节），不整文件 readBytes
+                    val input = ctx.contentResolver.openInputStream(uri)
+                        ?: throw java.io.IOException("无法读取文件")
+                    input.use { stream ->
+                        val magic = ByteArray(4)
+                        val read = stream.read(magic)
+                        val isZip = read >= 4 &&
+                            magic[0] == 0x50.toByte() &&  // P
+                            magic[1] == 0x4B.toByte() &&  // K
+                            magic[2] == 0x03.toByte() &&
+                            magic[3] == 0x04.toByte()
+
+                        if (isZip) {
+                            // 流式传给 BundleStore：拼回 magic + 剩余流，不整文件进内存
+                            val combined = java.io.SequenceInputStream(
+                                java.io.ByteArrayInputStream(magic, 0, read),
+                                stream
+                            )
+                            importKmdwork(combined, uri)
+                        } else {
+                            // 裸 .kmd：bounded read，超过上限立即停止读取并抛错，不整文件 readBytes。
+                            // magic 已 peek 的字节作为前缀传入，计入总量。
+                            val sourceText = readBoundedKmd(
+                                stream = stream,
+                                alreadyRead = if (read > 0) magic.copyOf(read) else ByteArray(0),
+                                maxBytes = MAX_PLAIN_KMD_BYTES
+                            )
+                            importPlainKmd(sourceText, uri)
+                        }
+                    }
+                }
+                // 导入成功后刷新作品列表，让导入的作品出现在 state.works 中
+                refreshWorks()
+            } catch (e: KmdworkUnpackException) {
+                reduce(KmdReaderAction.ImportFailed("导入失败：${e.message}"))
+            } catch (e: Exception) {
+                reduce(KmdReaderAction.ImportFailed("导入失败：${e.message ?: e::class.simpleName}"))
+            }
+        }
+    }
+
+    private suspend fun importKmdwork(input: java.io.InputStream, uri: android.net.Uri) {
+        val result = bundleStore.importBundle(input)
+        val manifest = result.manifest
+        val entrySource = result.entrySource
+
+        // 从 manifest 提取 metadata；fallback 从 entrySource frontmatter
+        val importMeta = KmdSourceMetadataParser.parseImportMetadata(entrySource)
+        val title = manifest.communitySnapshot?.title
+            ?: importMeta.title
+            ?: "导入作品"
+        val author = manifest.communitySnapshot?.authorName ?: importMeta.author ?: ""
+        val presentationMode = manifest.presentation?.mode?.let { normalizeMode(it) }
+            ?: importMeta.hints.presentationMode
+            ?: PresentationMode.Stage
+
+        val entry = LocalLibraryEntry(
+            workId = manifest.bundleId,
+            source = WorkSourceType.Local,
+            onShelf = true,
+            title = title,
+            authorName = author,
+            presentationMode = presentationMode,
+            aspectRatio = importMeta.hints.aspectRatio ?: "",
+            kmdSource = null,
+            contentUri = uri.toString(),
+            readingProgress = 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = null,
+            importedAt = nowMillis(),
+            cachedAt = nowMillis(),
+            bundleId = manifest.bundleId,
+            activeRevisionId = manifest.exportRevisionId,
+            contentHash = result.contentHash,
+            originWorkId = manifest.origin?.workId
+        )
+        localLibrary.upsertEntry(entry)
+        reduce(KmdReaderAction.ImportSucceeded(entry.workId))
+        sendEffect(KmdReaderEffect.ShowMessage("导入成功：$title"))
+    }
+
+    private suspend fun importPlainKmd(sourceText: String, uri: android.net.Uri) {
+        val importMeta = KmdSourceMetadataParser.parseImportMetadata(sourceText)
+        // 原 readBytes 路径用整文件 bytes 算 hash；bounded read 改为 String→UTF-8 bytes。
+        // 合法 KMD 文本 UTF-8 round-trip 无损，hash 稳定；记录此边界以便未来若引入非 UTF-8 编码需复核。
+        val contentBytes = sourceText.toByteArray(Charsets.UTF_8)
+        val contentHash = sha256Hex(contentBytes)
+        val workId = "local-${contentHash.take(8)}"
+
+        val entry = LocalLibraryEntry(
+            workId = workId,
+            source = WorkSourceType.Local,
+            onShelf = true,
+            title = importMeta.title ?: "本地脚本",
+            authorName = importMeta.author ?: "",
+            presentationMode = importMeta.hints.presentationMode ?: PresentationMode.Stage,
+            aspectRatio = importMeta.hints.aspectRatio ?: "",
+            kmdSource = sourceText,
+            contentUri = uri.toString(),
+            readingProgress = 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = null,
+            importedAt = nowMillis(),
+            cachedAt = nowMillis(),
+            bundleId = null,
+            activeRevisionId = null,
+            contentHash = contentHash,
+            originWorkId = null
+        )
+        localLibrary.upsertEntry(entry)
+        reduce(KmdReaderAction.ImportSucceeded(workId))
+        sendEffect(KmdReaderEffect.ShowMessage("导入成功：${entry.title}"))
+    }
+
+    private fun normalizeMode(raw: String): PresentationMode =
+        when (raw.trim().lowercase()) {
+            "scroll" -> PresentationMode.Scroll
+            "page", "paged" -> PresentationMode.Paged
+            "stage", "interactive" -> PresentationMode.Stage
+            else -> PresentationMode.Stage
+        }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        return buildString(digest.size * 2) { digest.forEach { append("%02x".format(it)) } }
+    }
+
+    // R3-D4：baseUrl 形如 https://kmd-reader-assets.local/<bundleId>/，解析末段即 bundleId，
+    // 调 bundleStore.ensureExtracted 展开 assets/scripts 到 cacheDir/runtime-extract/<bundleId>。
+    // 非 bundle 作品（baseUrl 为 null/其他）跳过。异常透出由 loadCurrentReaderWork 的 runCatching 兜底。
+    private fun extractBundleAssetsIfAny(baseUrl: String?) {
+        val host = "https://kmd-reader-assets.local/"
+        if (baseUrl == null || !baseUrl.startsWith(host)) return
+        val bundleId = baseUrl.removePrefix(host).trimEnd('/')
+        if (bundleId.isBlank() || bundleId.contains("/")) return
+        bundleStore.ensureExtracted(bundleId)
     }
 
     private fun openReaderCompanion(action: KmdReaderAction.OpenReaderCompanion) {
@@ -221,6 +388,10 @@ class KmdReaderViewModel(
                         it
                     }
                 }
+                // R3-D4：bundle 作品 load 前展开 assets/scripts 到 cacheDir/<bundleId>/，
+                // 供 shouldInterceptRequest 的 kmd-reader-assets.local host 服务（spike §4.5 第3步）。
+                // baseUrl 形如 https://kmd-reader-assets.local/<bundleId>/，解析末段即 bundleId。
+                extractBundleAssetsIfAny(work.assetManifest?.baseUrl)
                 runtimeBridge.load(
                     ReaderLoadRequest(
                         work = work,
@@ -972,12 +1143,14 @@ class KmdReaderViewModel(
     class Factory(
         private val repository: WorkRepository,
         private val runtimeBridge: ReaderRuntimeBridge,
-        private val localLibrary: LocalLibraryRepository
+        private val localLibrary: LocalLibraryRepository,
+        private val bundleStore: BundleStore,
+        private val appContext: android.content.Context
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(KmdReaderViewModel::class.java)) {
-                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary) as T
+                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary, bundleStore, appContext) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
@@ -1151,4 +1324,43 @@ class KmdReaderViewModel(
             importedAt = null,
             cachedAt = null
         )
+}
+
+/**
+ * Bounded read：流式读取裸 .kmd 文本，累计字节超过 [maxBytes] 时立即停止读取并抛 IOException，
+ * 避免超大非 zip 文件先整文件 readBytes 进内存造成压力（审查报告 Medium 修复；zip 路径已流式）。
+ *
+ * [alreadyRead] 是 peek magic 时已读出的前缀字节，计入总量但不从 [stream] 再读。
+ * 返回 UTF-8 解码后的文本（合法 KMD 文本 round-trip 无损）。
+ *
+ * 所有权：不关闭 [stream]——调用方（importFromUri 的 input.use）持有流的生命周期；
+ * 超限抛错后由外层 use 兜底关闭。测试直接传入裸流时需自行 close。
+ *
+ * 注：此函数只覆盖 bounded read 机制；实际 SAF ContentResolver 流的异常处理属于真机验证范畴。
+ */
+internal fun readBoundedKmd(
+    stream: java.io.InputStream,
+    alreadyRead: ByteArray,
+    maxBytes: Long
+): String {
+    val out = java.io.ByteArrayOutputStream()
+    if (alreadyRead.isNotEmpty()) {
+        out.write(alreadyRead)
+    }
+    var total = alreadyRead.size.toLong()
+    if (total > maxBytes) {
+        throw java.io.IOException("文件过大（超过 ${maxBytes / 1024 / 1024}MB）")
+    }
+    val buffer = ByteArray(8 * 1024)
+    while (true) {
+        val n = stream.read(buffer)
+        if (n <= 0) break
+        // 超上限立即停止：只读到此为止，不继续读完整个文件
+        if (total + n > maxBytes) {
+            throw java.io.IOException("文件过大（超过 ${maxBytes / 1024 / 1024}MB）")
+        }
+        out.write(buffer, 0, n)
+        total += n
+    }
+    return String(out.toByteArray(), Charsets.UTF_8)
 }

@@ -19,7 +19,8 @@ data class KmdReaderState(
     val readerViewport: ReaderViewportState = ReaderViewportState(),
     val readerHostRestartToken: Int = 0,
     val isLoadingWorks: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val importState: ImportState = ImportState.Idle
 ) {
     val selectedWork: Work?
         get() = works.firstOrNull { it.id == deskStack.currentWorkId }
@@ -33,4 +34,11 @@ data class KmdReaderState(
             val matchesMode = selectedMode == null || work.presentation.mode == selectedMode
             matchesQuery && matchesMode
         }
+}
+
+/** R3-D3 导入状态。 */
+sealed interface ImportState {
+    data object Idle : ImportState
+    data object Importing : ImportState
+    data class Failed(val message: String) : ImportState
 }
