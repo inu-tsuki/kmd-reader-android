@@ -69,13 +69,18 @@ class KmdworkUnpackerTest {
         return ByteArrayInputStream(baos.toByteArray())
     }
 
+    /**
+     * 构造 work.json。contentHash 为 null 时，revisions 为空且 exportRevisionId 为 null
+     * （用于测试缺失 exportRevisionId 的拒绝路径）。
+     */
     private fun workJson(
         bundleId: String = "bundle-test-001",
         entry: String = "scripts/main.kmd",
         contentHash: String? = null,
-        exportRevisionId: String? = "rev-1",
+        exportRevisionId: String? = if (contentHash != null) "rev-1" else null,
         assets: Map<String, BundleAssetRef> = emptyMap(),
-        fonts: List<BundleFontAsset> = emptyList()
+        fonts: List<BundleFontAsset> = emptyList(),
+        formatVersion: Int = 1
     ): ByteArray {
         val revisions = if (contentHash != null) {
             """[{"id":"rev-1","parentRevisionId":null,"contentHash":"$contentHash","message":"initial","createdAt":1000}]"""
@@ -84,7 +89,7 @@ class KmdworkUnpackerTest {
             else buildAssetManifestJson(assets, fonts)
         return """
             {
-              "formatVersion": 1,
+              "formatVersion": $formatVersion,
               "bundleId": "$bundleId",
               "entry": "$entry",
               "assetManifest": $assetManifest,
@@ -375,6 +380,64 @@ class KmdworkUnpackerTest {
         ))
 
         assertThrows<KmdworkUnpackException.ContentHashMismatch> {
+            KmdworkUnpacker.unpack(zip, targetDir)
+        }
+    }
+
+    @Test
+    fun exportRevisionIdMissingRejected() {
+        // exportRevisionId 为 null → contentHash 无法校验 → 拒绝
+        val source = "---\nmode: stage\n---\nHello".toByteArray()
+        val zip = buildZip(mapOf(
+            "work.json" to workJson(contentHash = sha256Hex(source), exportRevisionId = null),
+            "scripts/main.kmd" to source
+        ))
+
+        assertThrows<KmdworkUnpackException.ExportRevisionMissing> {
+            KmdworkUnpacker.unpack(zip, targetDir)
+        }
+    }
+
+    @Test
+    fun exportRevisionIdDanglingRejected() {
+        // exportRevisionId 指向不存在的 revision → 拒绝
+        val source = "---\nmode: stage\n---\nHello".toByteArray()
+        val zip = buildZip(mapOf(
+            "work.json" to workJson(contentHash = sha256Hex(source), exportRevisionId = "rev-nonexistent"),
+            "scripts/main.kmd" to source
+        ))
+
+        assertThrows<KmdworkUnpackException.ExportRevisionDangling> {
+            KmdworkUnpacker.unpack(zip, targetDir)
+        }
+    }
+
+    // ── formatVersion 校验 ──
+
+    @Test
+    fun unsupportedFormatVersionRejected() {
+        val source = "---\nmode: stage\n---\nHello".toByteArray()
+        val zip = buildZip(mapOf(
+            "work.json" to workJson(contentHash = sha256Hex(source), formatVersion = 99),
+            "scripts/main.kmd" to source
+        ))
+
+        assertThrows<KmdworkUnpackException.UnsupportedFormatVersion> {
+            KmdworkUnpacker.unpack(zip, targetDir)
+        }
+    }
+
+    // ── bundleId 路径穿越防护 ──
+
+    @Test
+    fun maliciousBundleIdPathTraversalRejected() {
+        val source = "---\nmode: stage\n---\nHello".toByteArray()
+        val zip = buildZip(mapOf(
+            "work.json" to workJson(bundleId = "../victim", contentHash = sha256Hex(source)),
+            "scripts/main.kmd" to source
+        ))
+
+        assertThrows<KmdworkUnpackException.InvalidBundleId> {
             KmdworkUnpacker.unpack(zip, targetDir)
         }
     }

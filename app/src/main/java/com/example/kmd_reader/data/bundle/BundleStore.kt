@@ -41,6 +41,25 @@ class BundleStore(
 
     fun runtimeCacheDir(bundleId: String): File = File(cacheDir, bundleId)
 
+    // ── 安全 guard ──
+
+    /**
+     * 确保 bundleId 是安全的单路径段，且解析后的目录不逃逸 bundlesDir / cacheDir。
+     * Defense-in-depth：KmdworkUnpacker 已在导入时校验 bundleId，这里在每次路径操作时再守一道。
+     */
+    private fun ensureSafeBundleId(bundleId: String) {
+        if (bundleId.isEmpty() || bundleId.contains("/") || bundleId.contains("\\") ||
+            bundleId.contains("..") || bundleId.contains(File.separator)) {
+            throw IllegalArgumentException("unsafe bundleId: $bundleId")
+        }
+    }
+
+    private fun ensureCanonicalContainance(dir: File, root: File) {
+        if (!dir.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+            throw IllegalArgumentException("path escapes store root: ${dir.canonicalPath}")
+        }
+    }
+
     // ── 导入 ──
 
     /**
@@ -55,7 +74,10 @@ class BundleStore(
         val tempDir = File(bundlesDir, ".import-tmp-${System.currentTimeMillis()}")
         try {
             val unpacked = KmdworkUnpacker.unpack(zipInput, tempDir)
+            // Defense-in-depth：unpacker 已校验 bundleId，这里再守一道 + canonical guard
+            ensureSafeBundleId(unpacked.bundleId)
             val destDir = bundleDir(unpacked.bundleId)
+            ensureCanonicalContainance(destDir, bundlesDir)
             // 同 bundleId 已存在则覆盖（重新导入）
             if (destDir.exists()) destDir.deleteRecursively()
             tempDir.renameTo(destDir)
@@ -77,11 +99,13 @@ class BundleStore(
     // ── 读取（D4 播放接线用，D2 先建接口）──
 
     fun readEntrySource(bundleId: String): String? {
+        ensureSafeBundleId(bundleId)
         val file = entrySourceFile(bundleId)
         return if (file.exists()) file.readText() else null
     }
 
     fun readManifest(bundleId: String): BundleManifest? {
+        ensureSafeBundleId(bundleId)
         val file = workJsonFile(bundleId)
         if (!file.exists()) return null
         return try {
@@ -92,13 +116,21 @@ class BundleStore(
         }
     }
 
-    fun bundleExists(bundleId: String): Boolean = bundleDir(bundleId).exists()
+    fun bundleExists(bundleId: String): Boolean {
+        ensureSafeBundleId(bundleId)
+        return bundleDir(bundleId).exists()
+    }
 
     // ── 删除（spike §2.4：删作品删三处）──
 
     fun deleteBundle(bundleId: String) {
-        bundleDir(bundleId).deleteRecursively()
-        runtimeCacheDir(bundleId).deleteRecursively()
+        ensureSafeBundleId(bundleId)
+        val bDir = bundleDir(bundleId)
+        ensureCanonicalContainance(bDir, bundlesDir)
+        val cDir = runtimeCacheDir(bundleId)
+        ensureCanonicalContainance(cDir, cacheDir)
+        bDir.deleteRecursively()
+        cDir.deleteRecursively()
     }
 
     // ── 清理 cache ──
@@ -108,7 +140,10 @@ class BundleStore(
     }
 
     fun clearRuntimeCache(bundleId: String) {
-        runtimeCacheDir(bundleId).deleteRecursively()
+        ensureSafeBundleId(bundleId)
+        val cDir = runtimeCacheDir(bundleId)
+        ensureCanonicalContainance(cDir, cacheDir)
+        cDir.deleteRecursively()
     }
 
     // ── 启动孤儿扫描（spike §2.4：删 Room 索引里不存在的 cacheDir 孤儿）──
