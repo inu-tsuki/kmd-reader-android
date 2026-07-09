@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class KmdReaderViewModel(
@@ -72,6 +73,8 @@ class KmdReaderViewModel(
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
         // 草稿落盘节流间隔。草稿比进度更敏感（用户逐字编辑），1s 窗口 + onCleared 兜底。
         private const val DRAFT_SAVE_INTERVAL_MS = 1_000L
+        // 裸 .kmd 纯文本最大大小（与 unpacker 单 entry 上限一致）
+        private const val MAX_PLAIN_KMD_BYTES = 10L * 1024 * 1024  // 10MB
     }
 
     init {
@@ -158,20 +161,40 @@ class KmdReaderViewModel(
         reduce(KmdReaderAction.ImportFromUri(uri))
         viewModelScope.launch {
             try {
-                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw java.io.IOException("无法读取文件")
-                // 读 magic bytes 判断 zip vs 纯文本
-                val isZip = bytes.size >= 4 &&
-                    bytes[0] == 0x50.toByte() &&  // P
-                    bytes[1] == 0x4B.toByte() &&  // K
-                    bytes[2] == 0x03.toByte() &&
-                    bytes[3] == 0x04.toByte()
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // peek magic bytes（只读前 4 字节），不整文件 readBytes
+                    val input = ctx.contentResolver.openInputStream(uri)
+                        ?: throw java.io.IOException("无法读取文件")
+                    input.use { stream ->
+                        val magic = ByteArray(4)
+                        val read = stream.read(magic)
+                        val isZip = read >= 4 &&
+                            magic[0] == 0x50.toByte() &&  // P
+                            magic[1] == 0x4B.toByte() &&  // K
+                            magic[2] == 0x03.toByte() &&
+                            magic[3] == 0x04.toByte()
 
-                if (isZip) {
-                    importKmdwork(bytes, uri)
-                } else {
-                    importPlainKmd(bytes, uri)
+                        if (isZip) {
+                            // 流式传给 BundleStore：拼回 magic + 剩余流，不整文件进内存
+                            val combined = java.io.SequenceInputStream(
+                                java.io.ByteArrayInputStream(magic, 0, read),
+                                stream
+                            )
+                            importKmdwork(combined, uri)
+                        } else {
+                            // 裸 .kmd：bounded read，超过上限立即停止读取并抛错，不整文件 readBytes。
+                            // magic 已 peek 的字节作为前缀传入，计入总量。
+                            val sourceText = readBoundedKmd(
+                                stream = stream,
+                                alreadyRead = if (read > 0) magic.copyOf(read) else ByteArray(0),
+                                maxBytes = MAX_PLAIN_KMD_BYTES
+                            )
+                            importPlainKmd(sourceText, uri)
+                        }
+                    }
                 }
+                // 导入成功后刷新作品列表，让导入的作品出现在 state.works 中
+                refreshWorks()
             } catch (e: KmdworkUnpackException) {
                 reduce(KmdReaderAction.ImportFailed("导入失败：${e.message}"))
             } catch (e: Exception) {
@@ -180,8 +203,8 @@ class KmdReaderViewModel(
         }
     }
 
-    private suspend fun importKmdwork(bytes: ByteArray, uri: android.net.Uri) {
-        val result = bundleStore.importBundle(java.io.ByteArrayInputStream(bytes))
+    private suspend fun importKmdwork(input: java.io.InputStream, uri: android.net.Uri) {
+        val result = bundleStore.importBundle(input)
         val manifest = result.manifest
         val entrySource = result.entrySource
 
@@ -221,10 +244,12 @@ class KmdReaderViewModel(
         sendEffect(KmdReaderEffect.ShowMessage("导入成功：$title"))
     }
 
-    private suspend fun importPlainKmd(bytes: ByteArray, uri: android.net.Uri) {
-        val sourceText = String(bytes, Charsets.UTF_8)
+    private suspend fun importPlainKmd(sourceText: String, uri: android.net.Uri) {
         val importMeta = KmdSourceMetadataParser.parseImportMetadata(sourceText)
-        val contentHash = sha256Hex(bytes)
+        // 原 readBytes 路径用整文件 bytes 算 hash；bounded read 改为 String→UTF-8 bytes。
+        // 合法 KMD 文本 UTF-8 round-trip 无损，hash 稳定；记录此边界以便未来若引入非 UTF-8 编码需复核。
+        val contentBytes = sourceText.toByteArray(Charsets.UTF_8)
+        val contentHash = sha256Hex(contentBytes)
         val workId = "local-${contentHash.take(8)}"
 
         val entry = LocalLibraryEntry(
@@ -1284,4 +1309,43 @@ class KmdReaderViewModel(
             importedAt = null,
             cachedAt = null
         )
+}
+
+/**
+ * Bounded read：流式读取裸 .kmd 文本，累计字节超过 [maxBytes] 时立即停止读取并抛 IOException，
+ * 避免超大非 zip 文件先整文件 readBytes 进内存造成压力（审查报告 Medium 修复；zip 路径已流式）。
+ *
+ * [alreadyRead] 是 peek magic 时已读出的前缀字节，计入总量但不从 [stream] 再读。
+ * 返回 UTF-8 解码后的文本（合法 KMD 文本 round-trip 无损）。
+ *
+ * 所有权：不关闭 [stream]——调用方（importFromUri 的 input.use）持有流的生命周期；
+ * 超限抛错后由外层 use 兜底关闭。测试直接传入裸流时需自行 close。
+ *
+ * 注：此函数只覆盖 bounded read 机制；实际 SAF ContentResolver 流的异常处理属于真机验证范畴。
+ */
+internal fun readBoundedKmd(
+    stream: java.io.InputStream,
+    alreadyRead: ByteArray,
+    maxBytes: Long
+): String {
+    val out = java.io.ByteArrayOutputStream()
+    if (alreadyRead.isNotEmpty()) {
+        out.write(alreadyRead)
+    }
+    var total = alreadyRead.size.toLong()
+    if (total > maxBytes) {
+        throw java.io.IOException("文件过大（超过 ${maxBytes / 1024 / 1024}MB）")
+    }
+    val buffer = ByteArray(8 * 1024)
+    while (true) {
+        val n = stream.read(buffer)
+        if (n <= 0) break
+        // 超上限立即停止：只读到此为止，不继续读完整个文件
+        if (total + n > maxBytes) {
+            throw java.io.IOException("文件过大（超过 ${maxBytes / 1024 / 1024}MB）")
+        }
+        out.write(buffer, 0, n)
+        total += n
+    }
+    return String(out.toByteArray(), Charsets.UTF_8)
 }
