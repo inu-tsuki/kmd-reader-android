@@ -1,6 +1,8 @@
 package com.example.kmd_reader.data
 
 import android.content.Context
+import com.example.kmd_reader.data.bundle.BundleStore
+import com.example.kmd_reader.data.bundle.BundleStoreModule
 import com.example.kmd_reader.data.local.KmdReaderDatabase
 import com.example.kmd_reader.data.remote.NetworkModule
 import com.example.kmd_reader.data.repository.FallbackWorkRepository
@@ -42,5 +44,9 @@ class KmdReaderAppContainer(context: Context) {
             revisionDao = database.localRevisionDao(),
             draftDao = database.localDraftDao()
         )
+    }
+
+    val bundleStore: BundleStore by lazy {
+        BundleStoreModule.create(appContext)
     }
 }
