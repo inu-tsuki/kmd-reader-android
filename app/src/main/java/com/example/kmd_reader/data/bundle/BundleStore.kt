@@ -80,7 +80,18 @@ class BundleStore(
             ensureCanonicalContainance(destDir, bundlesDir)
             // 同 bundleId 已存在则覆盖（重新导入）
             if (destDir.exists()) destDir.deleteRecursively()
-            tempDir.renameTo(destDir)
+            // renameTo 可能失败（跨文件系统/权限），检查返回值——
+            // 失败时 destDir 已被删但真正内容还留在 tempDir，必须清理 + 抛异常。
+            if (!tempDir.renameTo(destDir)) {
+                // fallback：手动复制（同文件系统下 renameTo 几乎不会失败，这是兜底）
+                try {
+                    tempDir.copyRecursively(destDir)
+                    tempDir.deleteRecursively()
+                } catch (copyEx: Exception) {
+                    destDir.deleteRecursively()
+                    throw IllegalStateException("failed to move bundle to $destDir", copyEx)
+                }
+            }
             // 建 revisions 目录（R3-E 写入用，D2 只建空目录）
             revisionsDir(unpacked.bundleId).mkdirs()
             // 清旧 cache
@@ -91,6 +102,9 @@ class BundleStore(
                 contentHash = unpacked.contentHash
             )
         } catch (e: KmdworkUnpackException) {
+            tempDir.deleteRecursively()
+            throw e
+        } catch (e: IllegalStateException) {
             tempDir.deleteRecursively()
             throw e
         }
