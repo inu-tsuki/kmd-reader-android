@@ -475,6 +475,13 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - 展开层：load 前 ensure `cacheDir/runtime-extract/<bundleId>/` 存在（从 bundle store 解压/复制）
 - 接线点：`KmdReaderViewModel.kt:188-231` / `ReaderRuntimeMappers.kt:5-14` / `ReaderRuntimeHost.kt:290-310`
 
+**R3-D4 完成记录（2026-07-10）**：
+- `getWorkSource` 的 bundleId 分支已在 R3-D3 的 `LocalAwareWorkRepository.getWorkSource()` 实现（`bundleId != null && bundleStore != null` → `readEntrySource`）；D4 未重复，revision 优先级留 R3-E。
+- fonts 透传根因：domain `WorkAssetManifest` 缺 `fonts` 字段导致 `toReaderRuntimeAssetManifest` 丢弃。修复方式：domain `WorkAssetManifest` 加 `fonts: List<WorkFontAsset>`（形状对齐 `ReaderRuntimeFontAsset`），mapper 补 `fonts.map{toReader()}`。远程路径（API DTO / Room 无 fonts 列）默认 `emptyList()`，不改 DTO/Room schema；本地作品 fonts 由 `LocalAwareWorkRepository.toWork()` 从 `BundleManifest.assetManifest` 现读，每次 rebuild。
+- assetManifest + baseUrl 改写：`LocalAwareWorkRepository.toWork(bundleStore)` 对 bundleId 作品读 `BundleManifest.assetManifest`，映射 baseUrl → `https://kmd-reader-assets.local/<bundleId>/`，fonts/assets 透传；裸 .kmd（bundleId=null）assetManifest=null。
+- 展开层：`BundleStore.ensureExtracted(bundleId)` 把 `filesDir/bundles/<bundleId>/{assets,scripts}` 复制到 `cacheDir/runtime-extract/<bundleId>/`（idempotent，半解失败清理 cache）；ViewModel `loadCurrentReaderWork` 在 `runtimeBridge.load` 前按 baseUrl 解析 bundleId 调用。展开缓存子目录名由 `BundleStoreModule.RUNTIME_EXTRACT_DIR` 单一常量定义。
+- shouldInterceptRequest：新增 `BundleAssetHost = "kmd-reader-assets.local"`，命中后 `resolveBundleAssetPath`（纯函数，单测覆盖路径解析 + 穿越 guard）解析 bundleId/rest，`openBundleAsset` 经 `resolveBundleAssetFile` 从 `cacheDir/runtime-extract/<bundleId>/<rest>` 服务（与 ensureExtracted 写入位置引用同一常量对齐）；RuntimeAssetHost 分支不动，两 host 共存。
+
 #### 主仓库核实结论（2026-07-08，关闭 spike §4.6 第一开放项）
 - runtime 字体全部经原生 **FontFace API** 加载（主仓库 `core/App.ts:290-298`），URL 由 `RuntimeAssetPolicy.resolveRuntimeAssetUrl` 按 `assetManifest.baseUrl` 解析；FontFace 的 `url()` 请求走 WebView 资源加载管线，**可被 `shouldInterceptRequest` 拦截**——现有 runtime 随包字体正是这样经 `kmd-reader-runtime.local` 加载的（`reader-runtime-web-bundle.md`）。
 - FontFace 注册成功后不再重复走 Pixi `Assets.load`；Android WebView 下无宿主 fonts 清单时跳过 20MB+ 默认字体（`kmdLoadDefaultFonts=1` 可强制）——bundle 自带字体经 `assetManifest.fonts → collectRuntimeFonts → FontFace`，主仓库链路已就绪，Android 侧只欠 D4 的 fonts 透传。

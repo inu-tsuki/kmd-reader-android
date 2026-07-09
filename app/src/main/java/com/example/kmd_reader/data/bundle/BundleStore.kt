@@ -147,6 +147,42 @@ class BundleStore(
         cDir.deleteRecursively()
     }
 
+    // ── R3-D4 展开：播放前把 bundle 的 assets/scripts 复制到 cacheDir/runtime-extract/<bundleId>/，
+    //    供 shouldInterceptRequest 的 kmd-reader-assets.local host 服务（spike §4.3/§4.5 第一步）。
+    //    idempotent：cacheDir 已存在且非空直接返回。失败清理半成品 cache 抛错。
+    //    不复制 work.json（runtime 不消费 manifest 字节）/revisions/（R3-E 范畴）。
+    //    spike §2.4 单作品假设：D4 不主动清旧 cache（clearRuntimeCache 已存在，留导入/后续接线）。
+    //    展开缓存子目录名 = BundleStoreModule.RUNTIME_EXTRACT_DIR（ensureExtracted 写入与
+    //    ReaderRuntimeHost.openBundleAsset 读取引用同一常量，避免路径错位稳定 miss）。
+    fun ensureExtracted(bundleId: String): File {
+        ensureSafeBundleId(bundleId)
+        val sourceDir = bundleDir(bundleId)
+        ensureCanonicalContainance(sourceDir, bundlesDir)
+        val targetDir = runtimeCacheDir(bundleId)
+        ensureCanonicalContainance(targetDir, cacheDir)
+        if (targetDir.exists() && targetDir.isDirectory && (targetDir.listFiles()?.isNotEmpty() == true)) {
+            return targetDir
+        }
+        if (!sourceDir.exists()) {
+            throw IllegalStateException("bundle 不存在：$bundleId")
+        }
+        try {
+            targetDir.mkdirs()
+            // 只复制 runtime 消费的子树：assets/ + scripts/。
+            listOf("assets", "scripts").forEach { sub ->
+                val src = File(sourceDir, sub)
+                if (src.exists() && src.isDirectory) {
+                    src.copyRecursively(File(targetDir, sub))
+                }
+            }
+        } catch (e: Exception) {
+            // 半解失败：清掉不完整 cache，避免后续播放读到残缺 assets
+            targetDir.deleteRecursively()
+            throw e
+        }
+        return targetDir
+    }
+
     // ── 清理 cache ──
 
     fun clearRuntimeCache() {

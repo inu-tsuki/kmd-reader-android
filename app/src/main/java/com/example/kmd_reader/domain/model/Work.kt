@@ -38,12 +38,23 @@ data class KmdScriptRevision(
 
 data class WorkAssetManifest(
     val baseUrl: String? = null,
-    val assets: Map<String, WorkAssetRef> = emptyMap()
+    val assets: Map<String, WorkAssetRef> = emptyMap(),
+    // R3-D4：bundle 自带字体透传。远程作品目前无 bundle fonts（API DTO 无 fonts），
+    // 默认空；本地导入作品由 toWork() 从 BundleManifest 现读填充。
+    val fonts: List<WorkFontAsset> = emptyList()
 )
 
 data class WorkAssetRef(
     val url: String,
     val type: String? = null
+)
+
+// R3-D4：字体资产，形状对齐 ReaderRuntimeFontAsset（family/url/weight/style）。
+data class WorkFontAsset(
+    val family: String,
+    val url: String,
+    val weight: String? = null,
+    val style: String? = null
 )
 
 data class WorkPresentation(

@@ -291,6 +291,17 @@ class KmdReaderViewModel(
         return buildString(digest.size * 2) { digest.forEach { append("%02x".format(it)) } }
     }
 
+    // R3-D4：baseUrl 形如 https://kmd-reader-assets.local/<bundleId>/，解析末段即 bundleId，
+    // 调 bundleStore.ensureExtracted 展开 assets/scripts 到 cacheDir/runtime-extract/<bundleId>。
+    // 非 bundle 作品（baseUrl 为 null/其他）跳过。异常透出由 loadCurrentReaderWork 的 runCatching 兜底。
+    private fun extractBundleAssetsIfAny(baseUrl: String?) {
+        val host = "https://kmd-reader-assets.local/"
+        if (baseUrl == null || !baseUrl.startsWith(host)) return
+        val bundleId = baseUrl.removePrefix(host).trimEnd('/')
+        if (bundleId.isBlank() || bundleId.contains("/")) return
+        bundleStore.ensureExtracted(bundleId)
+    }
+
     private fun openReaderCompanion(action: KmdReaderAction.OpenReaderCompanion) {
         val shouldDisableInspection =
             _state.value.readerCompanion.active == ReaderCompanionType.Review &&
@@ -377,6 +388,10 @@ class KmdReaderViewModel(
                         it
                     }
                 }
+                // R3-D4：bundle 作品 load 前展开 assets/scripts 到 cacheDir/<bundleId>/，
+                // 供 shouldInterceptRequest 的 kmd-reader-assets.local host 服务（spike §4.5 第3步）。
+                // baseUrl 形如 https://kmd-reader-assets.local/<bundleId>/，解析末段即 bundleId。
+                extractBundleAssetsIfAny(work.assetManifest?.baseUrl)
                 runtimeBridge.load(
                     ReaderLoadRequest(
                         work = work,

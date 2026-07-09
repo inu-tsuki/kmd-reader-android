@@ -1,11 +1,14 @@
 package com.example.kmd_reader.data.repository
 
 import com.example.kmd_reader.data.WorkRepository
+import com.example.kmd_reader.data.bundle.BundleStore
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 import com.example.kmd_reader.domain.model.WorkSourceType
+import java.io.File
+import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -209,6 +212,43 @@ class LocalAwareWorkRepositoryTest {
         assertTrue("远程作品未被本地覆盖", remoteWork === remoteInList)
     }
 
+    // —— R3-D4：bundle 作品 assetManifest + fonts 透传 + baseUrl 改写 ——
+
+    @Test
+    fun getWork_bundleEntryRewritesBaseUrlAndPassesFonts() = runTest {
+        val bid = "bundle-with-fonts"
+        val store = buildBundleStoreWithManifest(bid)
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(bundleImportedEntry(bid))
+        val delegate = RecordingWorkRepository(works = emptyList())
+        val repository = LocalAwareWorkRepository(delegate = delegate, localLibrary = localLibrary, bundleStore = store)
+
+        val work = repository.getWork(bid, refresh = true)
+
+        assertEquals(bid, work?.id)
+        val manifest = work?.assetManifest
+        assertTrue("bundle 作品应有 assetManifest", manifest != null)
+        assertEquals("https://kmd-reader-assets.local/$bid/", manifest?.baseUrl)
+        assertEquals(1, manifest?.fonts?.size)
+        assertEquals("titlefont", manifest?.fonts?.first()?.family)
+        assertEquals("assets/fonts/title.woff2", manifest?.fonts?.first()?.url)
+        assertEquals(1, manifest?.assets?.size)
+        assertEquals("assets/bg.png", manifest?.assets?.get("bg")?.url)
+    }
+
+    @Test
+    fun getWork_plainKmdEntryHasNullAssetManifest() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(localImportedEntry())
+        val delegate = RecordingWorkRepository(works = emptyList())
+        val repository = LocalAwareWorkRepository(delegate = delegate, localLibrary = localLibrary)
+
+        val work = repository.getWork("local-abc12345", refresh = true)
+
+        // 裸 .kmd：bundleId=null，无 assets
+        assertEquals(null, work?.assetManifest)
+    }
+
     // —— fixtures ——
 
     private fun remoteProgressEntry(workId: String = remoteWork.id) = LocalLibraryEntry(
@@ -252,6 +292,29 @@ class LocalAwareWorkRepositoryTest {
         contentHash = "deadbeef",
         originWorkId = null
     )
+
+    /** 模拟 importKmdwork 写入的 bundle 导入条目：source=Local、bundleId 非空、kmdSource=null。 */
+    private fun bundleImportedEntry(bid: String) = LocalLibraryEntry(
+        workId = bid,
+        source = WorkSourceType.Local,
+        onShelf = true,
+        title = "Bundle 作品",
+        authorName = "Bundle Author",
+        presentationMode = PresentationMode.Stage,
+        aspectRatio = "16:9",
+        kmdSource = null,
+        contentUri = "content://bundle",
+        readingProgress = 0f,
+        readingTimeMs = null,
+        readingDurationMs = null,
+        lastReadAt = null,
+        importedAt = 1L,
+        cachedAt = 1L,
+        bundleId = bid,
+        activeRevisionId = "rev-local",
+        contentHash = "cafe1234",
+        originWorkId = "origin-1"
+    )
 }
 
 /** 记录调用次数的 WorkRepository 假实现，用于断言 delegate 是否被命中。 */
@@ -280,4 +343,36 @@ private class RecordingWorkRepository(
         getWorkSourceCalls += 1
         return source
     }
+}
+
+/**
+ * 构造真实 BundleStore（tmp dir）并写入 work.json，含 assetManifest（fonts + assets）。
+ * 纯 JVM，不依赖 Android Context。readManifest 用 kotlinx.serialization + ignoreUnknownKeys。
+ */
+private fun buildBundleStoreWithManifest(bid: String): BundleStore {
+    val bundlesDir = Files.createTempDirectory("lawrt-bundles").toFile()
+    val cacheDir = Files.createTempDirectory("lawrt-cache").toFile()
+    val bundleDir = File(bundlesDir, bid).apply { mkdirs() }
+    // work.json 对齐 BundleManifest 序列化形状（BundleManifest.kt）。
+    File(bundleDir, "work.json").writeText(
+        """
+        {
+          "formatVersion": 1,
+          "bundleId": "$bid",
+          "entry": "scripts/main.kmd",
+          "assetManifest": {
+            "baseUrl": "original/bundle/base",
+            "fonts": [
+              {"family": "titlefont", "url": "assets/fonts/title.woff2", "weight": "700", "style": null}
+            ],
+            "assets": {
+              "bg": {"url": "assets/bg.png", "type": "image"}
+            }
+          }
+        }
+        """.trimIndent()
+    )
+    File(bundleDir, "scripts").mkdirs()
+    File(bundleDir, "scripts/main.kmd").writeText("title: test")
+    return BundleStore(bundlesDir = bundlesDir, cacheDir = cacheDir)
 }

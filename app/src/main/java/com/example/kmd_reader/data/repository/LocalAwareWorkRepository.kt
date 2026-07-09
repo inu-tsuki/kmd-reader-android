@@ -1,6 +1,10 @@
 package com.example.kmd_reader.data.repository
 
 import com.example.kmd_reader.data.WorkRepository
+import com.example.kmd_reader.data.bundle.BundleAssetManifest
+import com.example.kmd_reader.data.bundle.BundleAssetRef
+import com.example.kmd_reader.data.bundle.BundleFontAsset
+import com.example.kmd_reader.data.bundle.BundleManifest
 import com.example.kmd_reader.data.bundle.BundleStore
 import com.example.kmd_reader.domain.model.CommentSummary
 import com.example.kmd_reader.domain.model.ComplexityLevel
@@ -13,7 +17,10 @@ import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.PreviewMode
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
+import com.example.kmd_reader.domain.model.WorkAssetManifest
+import com.example.kmd_reader.domain.model.WorkAssetRef
 import com.example.kmd_reader.domain.model.WorkAttributes
+import com.example.kmd_reader.domain.model.WorkFontAsset
 import com.example.kmd_reader.domain.model.WorkLifecycleStatus
 import com.example.kmd_reader.domain.model.WorkPresentation
 import com.example.kmd_reader.domain.model.WorkSourceType
@@ -44,7 +51,7 @@ class LocalAwareWorkRepository(
         // （如迁移历史里的 source=Mock、kmdSource=null shelf 条目，见 KmdReaderDatabaseMigrationTest）。
         // 只把真正本地导入的 entry（isLocalEntry）映射成 Work 并覆盖远程，避免把远程/Mock 作品
         // 错误显示成 WorkSourceType.Local 空壳、丢掉原始 metadata。
-        val localWorks = localLibrary.getShelf().filter(::isLocalEntry).map { it.toWork() }
+        val localWorks = localLibrary.getShelf().filter(::isLocalEntry).map { it.toWork(bundleStore) }
         val localIds = localWorks.map { it.id }.toSet()
         return localWorks + remoteWorks.filterNot { it.id in localIds }
     }
@@ -53,7 +60,7 @@ class LocalAwareWorkRepository(
         // 只对真正本地导入的 entry 拦截。远程/Mock 作品首次阅读时会写入一个
         // source=Remote/Mock、kmdSource=null、bundleId=null、onShelf=false 的进度 entry，
         // 这类纯进度条目不能覆盖远程 Work（见 ViewModel.toLocalLibraryEntry）。
-        localLibrary.getEntry(id)?.takeIf(::isLocalEntry)?.let { return it.toWork() }
+        localLibrary.getEntry(id)?.takeIf(::isLocalEntry)?.let { return it.toWork(bundleStore) }
         return delegate.getWork(id, refresh)
     }
 
@@ -92,11 +99,20 @@ class LocalAwareWorkRepository(
 private fun isLocalEntry(entry: LocalLibraryEntry): Boolean =
     entry.source == WorkSourceType.Local || entry.kmdSource != null || entry.bundleId != null
 
+// R3-D4：bundle asset host（与 ReaderRuntimeHost 的 BundleAssetHost 对齐）。
+// baseUrl 改写为这个 host + bundleId，runtime 解析相对 asset 路径时基准就是这个虚拟 host，
+// 请求被 shouldInterceptRequest 接住（spike §4.4）。
+private const val BundleAssetHost = "https://kmd-reader-assets.local"
+
 /**
  * LocalLibraryEntry → Work 的映射。
  * 本地作品缺远程社区字段（description/tags/commentSummary），用合理默认填充。
+ *
+ * R3-D4：bundleId 作品从 BundleStore.readManifest() 读 assetManifest（含 fonts），
+ * baseUrl 改写为 https://kmd-reader-assets.local/<bundleId>/（spike §4.4/§4.6 展开层职责）。
+ * 裸 .kmd（kmdSource 非空、bundleId null）无 assets，assetManifest=null。
  */
-private fun LocalLibraryEntry.toWork(): Work {
+private fun LocalLibraryEntry.toWork(bundleStore: BundleStore?): Work {
     val mode = presentationMode
     val orientationHint = if (aspectRatio.contains(":")) {
         val parts = aspectRatio.split(":")
@@ -141,7 +157,7 @@ private fun LocalLibraryEntry.toWork(): Work {
                 contentHash = contentHash
             )
         ),
-        assetManifest = null,
+        assetManifest = resolveAssetManifest(bundleStore),
         estimatedDurationSec = 0,
         attributes = WorkAttributes(
             effectIntensity = EffectIntensity.Medium,
@@ -157,3 +173,39 @@ private fun LocalLibraryEntry.toWork(): Work {
         )
     )
 }
+
+/**
+ * R3-D4：解析本地导入作品的 assetManifest。
+ * - bundleId 作品：从 BundleStore 读 BundleManifest，映射 baseUrl（改写为虚拟 host）+ fonts + assets。
+ *   assets url 保持 bundle 内相对路径（runtime 用 baseUrl 解析，spike §4.4）。
+ * - 裸 .kmd（kmdSource 非空、bundleId null）：无 assets，返回 null。
+ * - bundleId 存在但读 manifest 失败（bundle 已删/损坏）：返回 null，让上层走 source 文本播放。
+ */
+private fun LocalLibraryEntry.resolveAssetManifest(bundleStore: BundleStore?): WorkAssetManifest? {
+    val bid = bundleId ?: return null
+    val store = bundleStore ?: return null
+    val manifest = store.readManifest(bid)?.assetManifest ?: return null
+    if (manifest.baseUrl.isNullOrBlank() && manifest.fonts.isEmpty() && manifest.assets.isEmpty()) {
+        return null
+    }
+    return manifest.toDomain(bundleId = bid)
+}
+
+private fun BundleAssetManifest.toDomain(bundleId: String): WorkAssetManifest = WorkAssetManifest(
+    // baseUrl 改写为虚拟 host + bundleId（spike §4.4/§4.6）；runtime 据此解析相对 asset 路径
+    baseUrl = "$BundleAssetHost/$bundleId/",
+    fonts = fonts.map { it.toDomain() },
+    assets = assets.mapValues { (_, asset) -> asset.toDomain() }
+)
+
+private fun BundleFontAsset.toDomain(): WorkFontAsset = WorkFontAsset(
+    family = family,
+    url = url,
+    weight = weight,
+    style = style
+)
+
+private fun BundleAssetRef.toDomain(): WorkAssetRef = WorkAssetRef(
+    url = url,
+    type = type
+)
