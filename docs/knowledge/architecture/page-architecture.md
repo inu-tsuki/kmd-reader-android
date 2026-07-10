@@ -213,7 +213,8 @@ flowchart LR
 - ✅ 书架分组（onShelf=true）+ 阅读历史分组（lastReadAt!=null 且 onShelf=false），卡片显示标题/进度条/时间。
 - ✅ 继续阅读入口（卡片「继续阅读」按钮 → OpenWork + OpenReader 一步直达 Reader）。
 - ✅ 设置和项目说明入口（`SettingsSheet` overlay，与 search overlay 同构，不新增 Desk 条带）。
-- 待后续（R3-G/H/I）：加入书架按钮、详情页继续阅读按钮态、阅读偏好设置。
+- ✅ 加入书架按钮（发现页 `WorkCard` + 详情页 `WorkDetailDesk` toggle）。
+- 待后续（R3-H/I）：详情页继续阅读按钮态、阅读偏好设置。
 
 ### 7.2 发现桌面
 

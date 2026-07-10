@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -71,6 +72,10 @@ class KmdReaderViewModel(
 
     // R3-C：issue 草稿 debounce 自动保存。按 draftId 记录上次落盘时间戳，与进度节流同构。
     private val lastDraftSavedAt = mutableMapOf<String, Long>()
+
+    // R3-G：串行化 shelf toggle，防止快速连续点击的并发 getEntry-then-setOnShelf 竞态
+    // （两次并发 toggle 可能读到相同 onShelf 值，写入相同目标，导致双击只翻转一次）。
+    private val shelfToggleMutex = kotlinx.coroutines.sync.Mutex()
 
     companion object {
         // 播放期间进度落盘节流间隔。单本 20min 作品写 ~240 次，断电最多丢 5s 进度。
@@ -1149,27 +1154,32 @@ class KmdReaderViewModel(
      *   （无 entry 时本就没有可覆盖的）。
      * - `setOnShelf` 在 entry 不存在时静默 no-op，故无 entry 路径必须走 `upsertEntry` 而非 `setOnShelf`。
      * - 成功后 `refreshShelf()` 刷新 UI（与 `persistProgressIfNeeded` 的模式一致），并发 ShowMessage。
+     * - `shelfToggleMutex` 串行化整个 getEntry-then-write 周期，防止快速连续点击的并发竞态
+     *   （两次并发 toggle 可能读到相同 onShelf 值，写入相同目标，导致双击只翻转一次）。
+     *   使用单一 Mutex 而非 per-workId map：shelf toggle 是低频操作，全局串行化不构成瓶颈。
      */
     private fun toggleShelf(workId: String) {
         viewModelScope.launch {
-            runCatching {
-                val existing = localLibrary.getEntry(workId)
-                if (existing != null) {
-                    localLibrary.setOnShelf(workId, onShelf = !existing.onShelf)
-                } else {
-                    val work = _state.value.works.firstOrNull { it.id == workId }
-                    if (work != null) {
-                        localLibrary.upsertEntry(work.toLocalLibraryEntry().copy(onShelf = true))
+            shelfToggleMutex.withLock {
+                runCatching {
+                    val existing = localLibrary.getEntry(workId)
+                    if (existing != null) {
+                        localLibrary.setOnShelf(workId, onShelf = !existing.onShelf)
+                    } else {
+                        val work = _state.value.works.firstOrNull { it.id == workId }
+                        if (work != null) {
+                            localLibrary.upsertEntry(work.toLocalLibraryEntry().copy(onShelf = true))
+                        }
                     }
+                }.onSuccess {
+                    refreshShelf()
+                    val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
+                    sendEffect(
+                        KmdReaderEffect.ShowMessage(if (onShelf) "已加入书架" else "已移出书架")
+                    )
+                }.onFailure {
+                    sendEffect(KmdReaderEffect.ShowMessage("书架操作失败"))
                 }
-            }.onSuccess {
-                refreshShelf()
-                val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
-                sendEffect(
-                    KmdReaderEffect.ShowMessage(if (onShelf) "已加入书架" else "已移出书架")
-                )
-            }.onFailure {
-                sendEffect(KmdReaderEffect.ShowMessage("书架操作失败"))
             }
         }
     }

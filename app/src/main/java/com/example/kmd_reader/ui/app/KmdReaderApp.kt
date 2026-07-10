@@ -180,7 +180,9 @@ fun KmdReaderApp(
                             works = state.filteredWorks,
                             resultCount = state.filteredWorks.size,
                             onOpenSearch = { dispatch(KmdReaderAction.OpenSearch) },
-                            onOpenWork = { dispatch(KmdReaderAction.OpenWork(it)) }
+                            onOpenWork = { dispatch(KmdReaderAction.OpenWork(it)) },
+                            shelfWorkIds = state.shelfState.shelf.map { it.workId }.toSet(),
+                            onToggleShelf = { dispatch(KmdReaderAction.ToggleShelf(it)) }
                         )
 
                         Desk.Detail -> WorkDetailDesk(
