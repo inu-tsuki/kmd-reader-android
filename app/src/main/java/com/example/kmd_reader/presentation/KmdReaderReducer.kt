@@ -157,6 +157,9 @@ object KmdReaderReducer {
                 readerCompanion = state.readerCompanion.toggleExpanded()
             )
 
+            // R3-G：纯副作用 action（DB 写在 VM），reducer no-op。
+            is KmdReaderAction.ToggleShelf -> state
+
             KmdReaderAction.OpenImport -> state.copy(
                 deskStack = DeskStackPolicy.openImport(state.deskStack),
                 importState = ImportState.Idle

@@ -1658,6 +1658,102 @@ class KmdReaderViewModelTest {
         )
     }
 
+    // ── R3-G：加入书架 / 移出书架 ──────────────────────────────────────
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfAddsNeverReadWorkToShelf() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        // glass-rail 从未读过、未导入 → DB 里无 entry。
+        assertNull(localLibrary.getEntry("glass-rail"))
+
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        advanceUntilIdle()
+
+        val entry = localLibrary.getEntry("glass-rail")
+        assertNotNull("toggle must create entry for never-read work", entry)
+        assertEquals(true, entry!!.onShelf)
+        // shelfState.shelf 应包含 glass-rail。
+        assertTrue(viewModel.state.value.shelfState.shelf.any { it.workId == "glass-rail" })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfPutsExistingEntryOnShelf() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 已有 entry，onShelf=false（读过但未加入书架）。
+        localLibrary.upsertEntry(
+            shelfEntry("glass-rail", onShelf = false, importedAt = null, lastReadAt = 1000L)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        advanceUntilIdle()
+
+        assertEquals(true, localLibrary.getEntry("glass-rail")?.onShelf)
+        // shelfState：shelf 包含，history 排除（onShelf=true 被 history filter 剔除）。
+        assertTrue(viewModel.state.value.shelfState.shelf.any { it.workId == "glass-rail" })
+        assertTrue(viewModel.state.value.shelfState.history.none { it.workId == "glass-rail" })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfRemovesFromShelf() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 已在书架。
+        localLibrary.upsertEntry(
+            shelfEntry("glass-rail", onShelf = true, importedAt = 2000L, lastReadAt = null)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        advanceUntilIdle()
+
+        assertEquals(false, localLibrary.getEntry("glass-rail")?.onShelf)
+        // 移出后不在 shelf 里。lastReadAt=null → 也不在 history 里。
+        assertTrue(viewModel.state.value.shelfState.shelf.none { it.workId == "glass-rail" })
+        assertTrue(viewModel.state.value.shelfState.history.none { it.workId == "glass-rail" })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfCreatesEntryWithDefaultFieldsWhenNoneExists() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(KmdReaderAction.ToggleShelf("rain-city"))
+        advanceUntilIdle()
+
+        val entry = localLibrary.getEntry("rain-city")
+        assertNotNull(entry)
+        assertEquals(true, entry!!.onShelf)
+        // 新建 entry 的进度/时间字段应为默认值，不应有残留。
+        assertEquals(0f, entry.readingProgress, 0.001f)
+        assertNull(entry.readingTimeMs)
+        assertNull(entry.readingDurationMs)
+        assertNull(entry.lastReadAt)
+        // importedAt 也为 null（这是加入书架，不是导入）。
+        assertNull(entry.importedAt)
+    }
+
     /** R3-F 测试 helper：构建可定制的 LocalLibraryEntry。 */
     private fun shelfEntry(
         workId: String,

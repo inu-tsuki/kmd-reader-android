@@ -24,9 +24,11 @@ import com.example.kmd_reader.ui.component.WorkMetaChips
 @Composable
 fun WorkDetailDesk(
     work: Work?,
+    onShelf: Boolean,
     onOpenReader: () -> Unit,
     onOpenReview: () -> Unit,
     onOpenImport: () -> Unit,
+    onToggleShelf: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (work == null) {
@@ -67,6 +69,9 @@ fun WorkDetailDesk(
             }
             OutlinedButton(onClick = onOpenReview) {
                 Text("审阅脚本")
+            }
+            OutlinedButton(onClick = onToggleShelf) {
+                Text(if (onShelf) "移出书架" else "加入书架")
             }
         }
         OutlinedButton(onClick = onOpenImport) {
