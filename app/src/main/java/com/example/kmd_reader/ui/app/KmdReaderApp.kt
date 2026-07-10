@@ -185,9 +185,17 @@ fun KmdReaderApp(
 
                         Desk.Detail -> WorkDetailDesk(
                             work = state.selectedWork,
+                            onShelf = state.shelfState.shelf.any {
+                                it.workId == state.deskStack.currentWorkId
+                            },
                             onOpenReader = { dispatch(KmdReaderAction.OpenReader) },
                             onOpenReview = { dispatch(KmdReaderAction.OpenReview) },
-                            onOpenImport = { dispatch(KmdReaderAction.OpenImport) }
+                            onOpenImport = { dispatch(KmdReaderAction.OpenImport) },
+                            onToggleShelf = {
+                                state.deskStack.currentWorkId?.let {
+                                    dispatch(KmdReaderAction.ToggleShelf(it))
+                                }
+                            }
                         )
 
                         Desk.Reader -> ReaderDesk(

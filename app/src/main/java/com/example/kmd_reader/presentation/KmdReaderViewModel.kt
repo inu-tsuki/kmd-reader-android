@@ -141,6 +141,7 @@ class KmdReaderViewModel(
             }
             is KmdReaderAction.ImportFromUri -> importFromUri(action.uri)
             KmdReaderAction.CancelImport -> reduce(action)
+            is KmdReaderAction.ToggleShelf -> toggleShelf(action.workId)
             else -> reduce(action)
         }
     }
@@ -1136,6 +1137,40 @@ class KmdReaderViewModel(
                 .filter { !it.onShelf }
                 .map { it.toShelfItem() }
             _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
+        }
+    }
+
+    /**
+     * R3-G：加入/移出书架。
+     *
+     * - 有 entry → `setOnShelf(!existing.onShelf)` 翻转。
+     * - 无 entry（从未读过/未导入的 remote/mock 作品）→ 先建 entry（`onShelf=true`）再上架，
+     *   镜像 `loadCurrentReaderWork` 的 get-then-insert 策略，不覆盖已有 progress/time 字段
+     *   （无 entry 时本就没有可覆盖的）。
+     * - `setOnShelf` 在 entry 不存在时静默 no-op，故无 entry 路径必须走 `upsertEntry` 而非 `setOnShelf`。
+     * - 成功后 `refreshShelf()` 刷新 UI（与 `persistProgressIfNeeded` 的模式一致），并发 ShowMessage。
+     */
+    private fun toggleShelf(workId: String) {
+        viewModelScope.launch {
+            runCatching {
+                val existing = localLibrary.getEntry(workId)
+                if (existing != null) {
+                    localLibrary.setOnShelf(workId, onShelf = !existing.onShelf)
+                } else {
+                    val work = _state.value.works.firstOrNull { it.id == workId }
+                    if (work != null) {
+                        localLibrary.upsertEntry(work.toLocalLibraryEntry().copy(onShelf = true))
+                    }
+                }
+            }.onSuccess {
+                refreshShelf()
+                val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
+                sendEffect(
+                    KmdReaderEffect.ShowMessage(if (onShelf) "已加入书架" else "已移出书架")
+                )
+            }.onFailure {
+                sendEffect(KmdReaderEffect.ShowMessage("书架操作失败"))
+            }
         }
     }
 

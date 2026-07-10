@@ -541,6 +541,23 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - 浏览/详情页「加入书架」
 - 阅读自动记录历史
 
+#### 落地现状
+
+**阅读自动记录历史**：无需新代码。当前链路已覆盖——`loadCurrentReaderWork` 在 OpenReader 时创建 `LocalLibraryEntry(onShelf=false)`，`updateProgress` 写 `lastReadAt`，`refreshShelf` 在 `init` / `refreshWorks` / `persistProgressIfNeeded` 后刷新 `shelfState`。从未读过的作品在 DB 里没有 entry，不出现在书架/历史里（正确行为）。
+
+**加入书架**：新增 `ToggleShelf(workId)` action，在详情页 `WorkDetailDesk` 提供「加入书架」/「移出书架」toggle 按钮。
+
+- **get-then-upsert 策略**：`setOnShelf` 在 entry 不存在时静默 no-op（`LocalLibraryRepository.kt:151`）。从未读过/未导入的 remote/mock 作品在 DB 里没有行——加入书架时先 `getEntry` 判断，无 entry 则用 `work.toLocalLibraryEntry().copy(onShelf = true)` 创建（不覆盖已有 progress/time，因为无 entry 时本就没有可覆盖的），有 entry 则 `setOnShelf(!existing.onShelf)` 翻转。
+- **Reducer 纯函数**：`ToggleShelf` 是纯副作用（DB 写 + `refreshShelf`），reducer 直接 `state`（no-op）。shelf 状态由 `refreshShelf()` 从 DB 刷新回 `shelfState`，不走 reducer 回写——与 `persistProgressIfNeeded` → `refreshShelf` 的现有模式一致。
+- **UI 状态来源**：详情页的 shelf 状态从 `state.shelfState.shelf.any { it.workId == currentWorkId }` 推导，不新增 state 字段。
+- **成功反馈**：`sendEffect(ShowMessage("已加入书架" / "已移出书架"))`，与 import 的 ShowMessage 模式一致。
+
+回归覆盖（KmdReaderViewModelTest 31 → 35）：
+- `toggleShelfAddsNeverReadWorkToShelf` — 无 entry → toggle → entry 创建，onShelf=true
+- `toggleShelfPutsExistingEntryOnShelf` — onShelf=false → toggle → onShelf=true，shelf 包含、history 排除
+- `toggleShelfRemovesFromShelf` — onShelf=true → toggle → onShelf=false，shelf 排除
+- `toggleShelfCreatesEntryWithDefaultFieldsWhenNoneExists` — 无 entry → toggle → 新 entry 的 progress/time/importedAt 均为默认值
+
 ### R3-H. 详情页「继续阅读」按钮态
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）
 - 有进度时显示上次阅读位置摘要
@@ -577,7 +594,7 @@ R3-A 数据层（entry + revision + drafts [+ annotation]，无依赖）
   └─→ R3-J 笔记/书签（视精力）
 ```
 
-已完成：A → B → C → D → E → F。
+已完成：A → B → C → D → E → F → G。
 
 下一顺序：先完成 R1 错误恢复与 R2 companion/横屏手测作为体验质量门；本地资产线执行 G → H；I 是独立的下一 UI 优化，可在 G/H 期间并行设计或实现；J 视精力。
 
