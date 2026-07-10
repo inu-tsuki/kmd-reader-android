@@ -431,9 +431,9 @@ class KmdReaderViewModelTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun readyDoesNotRestoreSeekWhenDurationMismatched() = runTest {
+    fun readyRestoresSeekDespiteDurationMismatch() = runTest {
+        // F4：duration 不匹配时仍恢复 seek（按比例定位，不依赖 duration 基准）。
         val localLibrary = InMemoryLocalLibraryRepository()
-        // 持久化 duration=2400，但本次 Ready 上报 4800（换源/修订）→ 不恢复
         localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
         val runtimeBridge = ManualRuntimeBridge()
         val viewModel = KmdReaderViewModel(
@@ -450,7 +450,7 @@ class KmdReaderViewModelTest {
         )
         advanceUntilIdle()
 
-        assertTrue("duration mismatch must skip restore seek", runtimeBridge.seekCalls.isEmpty())
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
     }
 
     @Test
@@ -719,9 +719,9 @@ class KmdReaderViewModelTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun readyDoesNotRestoreSeekWhenSavedDurationIsNull() = runTest {
-        // OQ（严格语义）：entry.readingDurationMs=null（旧 entry 无 duration 记录），
-        // 即便 event 上报了 duration，也不恢复 seek（无可靠基准）。
+    fun readyRestoresSeekWhenSavedDurationIsNull() = runTest {
+        // F4：entry.readingDurationMs=null 时仍恢复 seek——progress 是比例值，
+        // 不需要 duration 基准。原测试断言不恢复（OQ 严格语义），现在断言恢复。
         val localLibrary = InMemoryLocalLibraryRepository()
         // durationMs=null 模拟旧 entry。
         val work = MockWorks.works.first { it.id == "glass-rail" }
@@ -757,16 +757,13 @@ class KmdReaderViewModelTest {
         runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
         advanceUntilIdle()
 
-        assertTrue(
-            "must not restore seek when saved duration is null (no reliable baseline)",
-            runtimeBridge.seekCalls.isEmpty()
-        )
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
     }
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun readyDoesNotRestoreSeekWhenEventDurationIsNull() = runTest {
-        // OQ（严格语义）：entry 有 duration 但 event.durationMs=null，也不恢复。
+    fun readyRestoresSeekWhenEventDurationIsNull() = runTest {
+        // F4：event.durationMs=null 时仍恢复 seek——progress 是比例值，不需要 duration 基准。
         val localLibrary = InMemoryLocalLibraryRepository()
         localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400))
         val runtimeBridge = ManualRuntimeBridge()
@@ -783,10 +780,169 @@ class KmdReaderViewModelTest {
         runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = null))
         advanceUntilIdle()
 
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyDoesNotRestoreSeekWhenRevisionChanged() = runTest {
+        // F4-rev（审查 High）：entry 持久化的 activeRevisionId="rev-2"（上次存进度时
+        // 播放的版本），当前播放版本是 "rev-1"（MockWorks 默认）→ revision 变更，
+        // 同一百分比可能落在完全不同的叙事位置 → 不 seek。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400, activeRevisionId = "rev-2"))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        // loadCurrentReaderWork 构建 snapshot with revisionId="rev-1"（MockWorks 默认）
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
         assertTrue(
-            "must not restore seek when event duration is null (no reliable baseline)",
+            "revision changed must skip restore seek",
             runtimeBridge.seekCalls.isEmpty()
         )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyRestoresSeekWhenRevisionMatches() = runTest {
+        // F4-rev：entry activeRevisionId="rev-1" 与当前播放版本一致 → 恢复正常。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400, activeRevisionId = "rev-1"))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun readyRestoresSeekWhenSavedRevisionIsNull() = runTest {
+        // F4-rev 向后兼容：entry.activeRevisionId=null（旧 entry 无 revision 记录），
+        // 当前播放版本非 null → 仍恢复（无身份可比，宽容）。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0.42f, durationMs = 2400, activeRevisionId = null))
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        assertEquals(0.42f, runtimeBridge.seekCalls.single(), 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun continueReadingRestoresProgressAfterProgressOnlySave() = runTest {
+        // F4 端到端回归：模拟 runtime 不带 duration 的完整 save-then-restore 周期。
+        // ProgressChanged(durationMs=null) → flush → 重建 VM → Ready(durationMs=null) → 仍 seek。
+        // Bug A（updateProgress null 覆盖 readingDurationMs）+ Bug B（duration 硬门控）联合症状：
+        // 原实现在此场景下永远跳过恢复。
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 首次阅读：建 entry（带初始 duration 2400）
+        localLibrary.upsertEntry(progressEntry("glass-rail", progress = 0f, durationMs = 2400))
+        val runtimeBridge1 = ManualRuntimeBridge()
+        val viewModel1 = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge1,
+            localLibrary = localLibrary,
+            nowMillis = { clock }
+        )
+        viewModel1.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel1.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge1.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = null))
+        advanceUntilIdle()
+        // runtime 发 ProgressChanged 不带 duration（模拟实际 runtime 行为）
+        runtimeBridge1.emit(
+            ReaderRuntimeEvent.ProgressChanged(
+                workId = "glass-rail",
+                progress = 0.5f,
+                positionPayload = "line:0",
+                timeMs = 1200,
+                durationMs = null
+            )
+        )
+        advanceUntilIdle()
+        // flush（模拟 onCleared）
+        viewModel1.flushProgressOnCleared()
+
+        // 验证 DB 中的 duration 未被 null 覆盖（Bug A）
+        val entry = localLibrary.getEntry("glass-rail")
+        assertEquals(0.5f, entry?.readingProgress ?: -1f, 0.001f)
+        assertEquals(2400L, entry?.readingDurationMs)
+
+        // 重建 VM（模拟下次打开）
+        clock = 5000L
+        val runtimeBridge2 = ManualRuntimeBridge()
+        val viewModel2 = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge2,
+            localLibrary = localLibrary,
+            nowMillis = { clock }
+        )
+        viewModel2.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel2.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge2.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = null))
+        advanceUntilIdle()
+
+        assertEquals(0.5f, runtimeBridge2.seekCalls.single(), 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun updateProgressPreservesExistingDurationWhenIncomingIsNull() = runTest {
+        // F4 单元测试：updateProgress(durationMs=null) 不应清除已有的 readingDurationMs。
+        // F4-rev：同时验证 revisionId=null 不清除已有的 activeRevisionId。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 初始 entry 带 durationMs=2400, activeRevisionId="rev-1"
+        localLibrary.upsertEntry(
+            progressEntry("glass-rail", progress = 0.3f, durationMs = 2400, activeRevisionId = "rev-1")
+        )
+        // 第一次 updateProgress 带 durationMs=2400, revisionId="rev-1"（正常）
+        localLibrary.updateProgress("glass-rail", 0.5f, 1200, 2400, 1000, "rev-1")
+        assertEquals(2400L, localLibrary.getEntry("glass-rail")?.readingDurationMs)
+        assertEquals("rev-1", localLibrary.getEntry("glass-rail")?.activeRevisionId)
+        // 第二次 updateProgress 带 durationMs=null, revisionId=null（runtime 未上报）→ 不应覆盖
+        localLibrary.updateProgress("glass-rail", 0.6f, 1440, null, 2000, null)
+        assertEquals(
+            "updateProgress must preserve existing readingDurationMs when incoming is null",
+            2400L,
+            localLibrary.getEntry("glass-rail")?.readingDurationMs
+        )
+        assertEquals(
+            "updateProgress must preserve existing activeRevisionId when incoming is null",
+            "rev-1",
+            localLibrary.getEntry("glass-rail")?.activeRevisionId
+        )
+        assertEquals(0.6f, localLibrary.getEntry("glass-rail")?.readingProgress ?: -1f, 0.001f)
     }
 
     @Test
@@ -1549,7 +1705,8 @@ class KmdReaderViewModelTest {
     private fun progressEntry(
         workId: String,
         progress: Float,
-        durationMs: Long
+        durationMs: Long,
+        activeRevisionId: String? = null
     ): LocalLibraryEntry {
         val work = MockWorks.works.first { it.id == workId }
         return LocalLibraryEntry(
@@ -1567,7 +1724,8 @@ class KmdReaderViewModelTest {
             readingDurationMs = durationMs,
             lastReadAt = null,
             importedAt = null,
-            cachedAt = null
+            cachedAt = null,
+            activeRevisionId = activeRevisionId
         )
     }
 
@@ -1642,8 +1800,8 @@ private class ControllableLocalLibraryRepository(
     override suspend fun getHistory(): List<LocalLibraryEntry> = delegate.getHistory()
     override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
     override suspend fun updateProgress(
-        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long
-    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now)
+        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long, revisionId: String?
+    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
     override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
         delegate.setOnShelf(workId, onShelf)
     override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)

@@ -1,5 +1,6 @@
 package com.example.kmd_reader.presentation
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -675,21 +676,52 @@ class KmdReaderViewModel(
     }
 
     // R3-B 步骤3：Ready 后从本地库读进度并 seek。
-    // 守卫：progress ∈ (0,1) 且 readingDurationMs 与 event.durationMs 双方都非 null 且相等。
-    //   - 任一方为 null（无可靠基准）则不恢复（OQ 审阅：严格语义）。
-    //   - duration 不匹配（换源/修订）则不恢复，防"旧进度 + 新 duration = 跳到错位置"。
+    // F4：duration 守卫降级为软警告。seek 是按比例定位（0..1），不依赖 duration 基准——
+    //   duration 不匹配只意味着内容可能落在不同段落（换源/修订），不是定位安全问题。
+    //   原硬门控（双方非 null 且相等才 seek）在 readingDurationMs 被 null 覆盖后永远跳过
+    //   恢复，「继续阅读」只重开不续读。现在只要 progress ∈ (0,1) 就 seek，duration
+    //   不匹配时 Log.w 留诊断信号。
     // F2 修复：seek 成功后回写 state.progress。否则 Ready 设的 progress=0f 会留存到
     //   runtime echo ProgressChanged 之前；若此窗口内 onCleared，flush 会写 0f 覆盖恢复点。
+    // F4-rev：revision 身份门控替代 duration 硬门控。progress 是比例值（0..1），同一
+    //   revision 下比例定位可靠；换 revision 后同一百分比可能落在完全不同的叙事位置。
+    //   持久化的 entry.activeRevisionId 是「上次存进度时的播放版本」（由 persistProgress
+    //   和 flush 写入），当前播放版本从 sourceSnapshotsByWorkId 取。不一致则不恢复。
+    //   - savedRevisionId == null：旧 entry 无身份记录（或首读未写 revision）→ 向后兼容，仍恢复
+    //   - currentRevisionId == null：snapshot 尚未建立（异常）→ 宽容，仍恢复
+    //   - 两者都非 null 且不等：revision 变更 → 不 seek，从头开始
+    // F4：duration 不匹配降级为 Log.w 软警告（不阻断恢复）。
+    // F2 修复：seek 成功后回写 state.progress，防 onCleared flush 写 0f 覆盖恢复点。
     private fun restoreSeekOnReady(workId: String, durationMs: Long?) {
         viewModelScope.launch {
             runCatching {
                 val entry = localLibrary.getEntry(workId) ?: return@launch
                 val progress = entry.readingProgress
                 if (progress <= 0f || progress >= 1f) return@launch
-                val savedDuration = entry.readingDurationMs
-                if (savedDuration == null || durationMs == null || savedDuration != durationMs) {
+
+                // revision 身份门控（审查 High）
+                val currentRevisionId = _state.value.sourceSnapshotsByWorkId[workId]?.revisionId
+                val savedRevisionId = entry.activeRevisionId
+                if (savedRevisionId != null && currentRevisionId != null
+                    && savedRevisionId != currentRevisionId
+                ) {
+                    // revision 变更——从头开始，不 seek。
                     return@launch
                 }
+
+                // F4：duration 不匹配降级为软警告。Log.w 用独立 runCatching 包裹，
+                // 避免测试环境 android.util.Log stub 异常影响主流程。
+                val savedDuration = entry.readingDurationMs
+                if (savedDuration != null && durationMs != null && savedDuration != durationMs) {
+                    runCatching {
+                        Log.w(
+                            "KmdReaderVM",
+                            "restoreSeek: duration mismatch (saved=$savedDuration event=$durationMs) " +
+                                "for work=$workId — seeking by progress=$progress anyway"
+                        )
+                    }
+                }
+
                 runtimeBridge.seek(progress)
                 // 回写恢复后的进度，使 onCleared flush 拿到恢复点而非 0f。
                 _state.update {
@@ -720,9 +752,12 @@ class KmdReaderViewModel(
             return
         }
         lastProgressSavedAt[workId] = now
+        // F4-rev：随进度写入当前 revisionId，让 DB entry 携带「上次存进度时的播放版本」。
+        // restoreSeekOnReady 据此判断是否换源/换版本，决定是否恢复断点。
+        val revisionId = _state.value.sourceSnapshotsByWorkId[workId]?.revisionId
         viewModelScope.launch {
             runCatching {
-                localLibrary.updateProgress(workId, progress, timeMs, durationMs, now)
+                localLibrary.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
             }.onSuccess {
                 // R3-F：进度写库后刷新 shelfState，否则书架/历史卡片在同会话内 stale。
                 // updateProgress 设置 lastReadAt → 该 work 进入历史列表；已有书架条目的进度/时间也同步。
@@ -1154,12 +1189,15 @@ class KmdReaderViewModel(
             runBlocking {
                 val session = _state.value.readerSession as? ReaderSessionState.Ready
                     ?: return@runBlocking
+                // F4-rev：flush 也写 revisionId，保持与 persistProgressIfNeeded 一致。
+                val revisionId = _state.value.sourceSnapshotsByWorkId[session.workId]?.revisionId
                 localLibrary.updateProgress(
                     workId = session.workId,
                     progress = session.progress,
                     timeMs = session.timeMs,
                     durationMs = session.durationMs,
-                    now = nowMillis()
+                    now = nowMillis(),
+                    revisionId = revisionId
                 )
             }
         }
