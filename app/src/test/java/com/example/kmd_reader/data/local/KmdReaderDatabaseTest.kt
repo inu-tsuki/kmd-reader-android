@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.kmd_reader.data.mock.MockWorks
+import com.example.kmd_reader.data.repository.RoomLocalLibraryRepository
 import com.example.kmd_reader.data.repository.toEntity
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -304,5 +305,40 @@ class KmdReaderDatabaseTest {
         revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 1L))
         // 同 id 再 insert → ABORT，抛 SQLite constraint 异常
         revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 5L))
+    }
+
+    // ── F4-rev Room 路径回归：updateProgress(durationMs=null, revisionId=null) 保留已有值 ──
+    // 审查指出 F4 只覆盖 InMemory 仓储；此处用真实 Room DB 验证同样的保留语义。
+
+    @Test
+    fun roomUpdateProgressPreservesDurationAndRevisionWhenIncomingIsNull() = runTest {
+        val repo = RoomLocalLibraryRepository(libraryDao, revisionDao, draftDao)
+
+        // 初始 entry 带 durationMs=2400, activeRevisionId="rev-1"
+        libraryDao.upsert(
+            libraryEntry("rain-city", progress = 0.3f).copy(
+                readingDurationMs = 2400,
+                activeRevisionId = "rev-1"
+            )
+        )
+        // 第一次 updateProgress 带 durationMs=2400, revisionId="rev-1"（正常）
+        repo.updateProgress("rain-city", 0.5f, 1200, 2400, 1000, "rev-1")
+        val after1 = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        assertEquals(2400L, after1.readingDurationMs)
+        assertEquals("rev-1", after1.activeRevisionId)
+        // 第二次 updateProgress 带 durationMs=null, revisionId=null（runtime 未上报）→ 不应覆盖
+        repo.updateProgress("rain-city", 0.6f, 1440, null, 2000, null)
+        val after2 = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        assertEquals(
+            "Room updateProgress must preserve readingDurationMs when incoming is null",
+            2400L,
+            after2.readingDurationMs
+        )
+        assertEquals(
+            "Room updateProgress must preserve activeRevisionId when incoming is null",
+            "rev-1",
+            after2.activeRevisionId
+        )
+        assertEquals(0.6f, after2.readingProgress, 0.001f)
     }
 }

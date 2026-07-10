@@ -314,6 +314,15 @@ object KmdReaderReducer {
             KmdReaderAction.JumpSelectedSourceLineToPlayback -> state.copy(
                 readerChrome = state.readerChrome.show(mode = ReaderChromeMode.Reviewing)
             )
+
+            // R3-F：设置/关于 overlay（与 search overlay 同构，切布尔不新增 Desk 条带）。
+            KmdReaderAction.OpenSettings -> state.copy(
+                deskStack = DeskStackPolicy.openSettings(state.deskStack)
+            )
+
+            KmdReaderAction.CloseSettings -> state.copy(
+                deskStack = DeskStackPolicy.closeSettings(state.deskStack)
+            )
         }
 
     private fun selectIssue(

@@ -1,7 +1,7 @@
 # R3：完善的本地阅读器 —— 实施规划
 
 > 文档状态：规划草案
-> 最近更新：2026-07-08（采纳 storage spike §7 推荐全表；R3-D 扩写为 D1–D4 切片）
+> 最近更新：2026-07-10（R3-F 已落地；R3-I 确认为下一 UI 优化切片）
 > 代号：R3
 > 权威范围：本地数据模型、书架、导入、阅读进度持久化、设置、完整离线阅读体验
 
@@ -366,9 +366,18 @@ R3-B 首版落 PR #5 后审阅发现 1 High + 2 Medium 数据完整性风险 + 1
 - **F1（High）迟到事件 workId 门控**：WebView 单例复用，切 work 后旧 work 的迟到 `Ready`/`ProgressChanged` 仍能到达。原代码无条件用 `event.workId` 重建 session + 写 Room → 数据腐败。修复：以 `deskStack.currentWorkId` 为基准门控（OpenWork 立即更新它，比 readerSession 更早反映切换）。`sessionId` 不可用（每个 WebView 进程固定一次，跨 work swap 不变）。
 - **F2（Medium）restore seek 后回写 state**：`Ready` 设 `progress=0f`，restore 只调 `bridge.seek` 不回写 state，restore 与 runtime echo `ProgressChanged` 之间若 `onCleared`，flush 写 `0f` 覆盖恢复点。修复：seek 成功后回写 `session.progress`。
 - **F3（Medium）节流计数器 per-work**：`lastProgressSavedAt` 原为 ViewModel 全局单值，work A 存盘后 5s 内开 work B，B 的首个进度事件被误中 A 的窗口而丢弃。修复：改为 `mutableMapOf<String, Long>()` by workId，map 不含 key 即首次（同时移除 `hasSavedProgress` 标志）。
-- **OQ（Open Question）duration 守卫严格化**：原代码"任一 null 就恢复"（宽松），与文档 `==` 措辞不符。决议：**严格——双方都非 null 且相等才恢复**（最保守，无可靠基准不恢复）。对齐代码注释与本节措辞。
+- **OQ（Open Question）duration 守卫严格化**：原代码"任一 null 就恢复"（宽松），与文档 `==` 措辞不符。决议：**严格——双方都非 null 且相等才恢复**（最保守，无可靠基准不恢复）。对齐代码注释与本节措辞。**→ 已被 F4 推翻**（见下）。
+- **F4（High）继续阅读断点恢复失效**：实机测试发现「继续阅读」只重开不续读。根因两处：
+  - **Bug A — `updateProgress` 用 null 覆盖 `readingDurationMs`**：`ProgressChanged`/`Ready` 事件的 `durationMs` 是 nullable，runtime 经常不带。`updateProgress` 全量 `copy()` 无条件写入 `readingDurationMs = durationMs`，一次 null 事件就清除已有基准。下次打开 `restoreSeekOnReady` 读到 `savedDuration == null` → bail。修复：`durationMs ?: existing.readingDurationMs`（Room + InMemory 双实现）。
+  - **Bug B — `restoreSeekOnReady` 的 duration 硬门控**：原 OQ 决议要求 `savedDuration != null && durationMs != null && savedDuration == durationMs` 才 seek。但 seek 是按比例（0..1）定位的，不依赖 duration 基准——duration 不匹配只意味着内容可能落在不同段落（换源/修订），不是定位安全问题。硬门控在 duration 被 null 覆盖后永远跳过恢复。修复：降级为 `Log.w` 软警告，只要 `progress ∈ (0,1)` 就 seek。**→ 已被 F4-rev 修正**（见下）。
+  - 回归覆盖：3 个原「不恢复」测试改为「仍恢复」（`readyRestoresSeekDespiteDurationMismatch` / `readyRestoresSeekWhenSavedDurationIsNull` / `readyRestoresSeekWhenEventDurationIsNull`）；新增 2 个（`continueReadingRestoresProgressAfterProgressOnlySave` 端到端 save-restore 周期 + `updateProgressPreservesExistingDurationWhenIncomingIsNull` 单元），KmdReaderViewModelTest 26 → 28 用例。
+- **F4-rev（High）revision 身份门控 + 错误隔离恢复**：审查指出 F4 的 duration 软降级有高风险——换 revision 后同一百分比可能落在完全不同的叙事位置，只 warning 不够。
+  - **审查 High — revision 身份门控**：`restoreSeekOnReady` 新增 revision 身份门控替代 duration 硬门控。`persistProgressIfNeeded` 和 `flushProgressOnCleared` 现在随进度写入当前 `revisionId`（从 `sourceSnapshotsByWorkId` 取），`updateProgress` 签名增加 `revisionId: String?` 参数（null 不覆盖已有值，与 durationMs 同策略）。恢复时比对 `entry.activeRevisionId` 与当前播放 revisionId：两者都非 null 且不等 → **不 seek**（revision 变更，从头开始）；任一为 null → 仍恢复（向后兼容）。duration 不匹配保持 `Log.w` 软警告。
+  - **审查 Medium — 错误隔离恢复**：F4 将 `localLibrary.getEntry()` 移出 `runCatching`，Room 读取失败会成为未处理的 `viewModelScope` 异常。恢复为单个 `runCatching` 包裹 DB 读取 + seek + 状态回写。`Log.w` 用独立 `runCatching` 包裹，异常不影响主流程。
+  - **审查测试缺口 — Room 路径**：F4 只覆盖 InMemory 仓储。新增 `roomUpdateProgressPreservesDurationAndRevisionWhenIncomingIsNull`（`KmdReaderDatabaseTest`，真实 Room DB + `RoomLocalLibraryRepository`）验证 Room 路径 null-duration/revision 保留。
+  - 回归覆盖：新增 4 个（`readyDoesNotRestoreSeekWhenRevisionChanged` / `readyRestoresSeekWhenRevisionMatches` / `readyRestoresSeekWhenSavedRevisionIsNull` / Room 路径保留测试），`updateProgressPreservesExistingDurationWhenIncomingIsNull` 扩展为同时验证 revisionId 保留。KmdReaderViewModelTest 28 → 31 用例，KmdReaderDatabaseTest +1。
 
-新增 6 个回归用例（`staleReadyEventDoesNotMutateSession...` / `staleProgressEventDoesNotPersist...` / `restoreSeekThenFlushBeforeProgressEcho...` / `throttleResetsAcrossWorks` / `readyDoesNotRestoreSeekWhenSavedDurationIsNull` / `readyDoesNotRestoreSeekWhenEventDurationIsNull`），KmdReaderViewModelTest 20 → 26 用例。
+新增 6 个回归用例（`staleReadyEventDoesNotMutateSession...` / `staleProgressEventDoesNotPersist...` / `restoreSeekThenFlushBeforeProgressEcho...` / `throttleResetsAcrossWorks` / `readyRestoresSeekWhenSavedDurationIsNull` / `readyRestoresSeekWhenEventDurationIsNull`），KmdReaderViewModelTest 20 → 26 用例。F4 后 3 个改名 + 2 个新增 → 28 用例。F4-rev 后 +3 新增 → 31 用例。
 
 #### 不做（范围外）
 
@@ -518,11 +527,15 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - ~~resolver 同时返回 entry、latestRevision、source 与 Work projection，保证 `Work.script.activeRevisionId` 和实际播放 source 来自同一个解析结果。~~ **已落地**：`LocalPlayable` 数据类包含 `entry` / `playableRevision` / `source`，resolver 一次解析供三个路径消费。
 - 真实提交入口出现后，再评估是否把 `LocalLibraryEntry.activeRevisionId/contentHash` 作为 denormalized 快照维护；该写入应由提交 use-case 统一处理，而不是分散在 Repository 调用方。
 
-### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）
-- MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null）
-- 卡片显示标题、进度、时间
-- 继续阅读入口
-- 书架页提供设置/关于入口（page-architecture 要求）
+### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）— 已落地（2026-07-09）
+- MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null 且 onShelf=false）
+- 卡片显示标题、进度条（0%/<1% 隐藏）、时间（lastReadAt/importedAt 粗粒度天数格式化）
+- 继续阅读入口：卡片「继续阅读」按钮（progress>0 且 hasLocalSource）→ OpenWork + OpenReader 一步直达 Reader
+- 书架页提供设置/关于入口：`SettingsSheet` overlay（与 FilterOverlay 同构，不新增 Desk 条带）
+- **数据流**：`KmdReaderViewModel.refreshShelf()` 从 `localLibrary.getShelf()/getHistory()` 加载 → `ShelfItem`（纯 UI 模型，entry 直接组装，不 join Work）→ `KmdReaderState.shelfState`
+- **进度写库后刷新**（审查修复）：`persistProgressIfNeeded` 在 `updateProgress` 成功后调 `refreshShelf()`，确保同会话内阅读进度/历史即时刷新，不 stale 到下一次 refreshWorks/重启。`flushProgressOnCleared` 不刷新（VM 即将销毁，下次启动 init 会重新加载）。
+- **测试**：9 例（shelf/history 分组、排除无 shelf/history entry、shelf+history 分离、openSettings/closeSettings/isSettingsOpen 布尔切换、openSettings 关闭 search、ProgressChanged 后 history 即时出现、ProgressChanged 后已有 history 条目进度刷新）
+- **不做**（R3-F 边界）：加入书架按钮（R3-G）、详情页继续阅读按钮态（R3-H）、阅读偏好设置（R3-I）— SettingsSheet 只放关于/版本占位
 
 ### R3-G. 加入书架
 - 浏览/详情页「加入书架」
@@ -532,11 +545,17 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）
 - 有进度时显示上次阅读位置摘要
 
-### R3-I. 设置页（阅读偏好）
-- 新建设置页：字号（fontScale）、主题（明/暗）、自动保存进度开关、reducedMotion（PRD 5.6/7.1）
-- 偏好持久化（DataStore Preferences）
-- 阅读时应用偏好：fontScale → ReaderSettings.fontScale，主题 → Compose 主题，reducedMotion → ReaderSettings.reducedMotion
-- reader_preferences 从"R3 不做"升级为 R3 必做（PRD MVP 要求）
+### R3-I. 设置页（阅读偏好）— 下一 UI 优化
+
+R3-F 已提供 `SettingsSheet` 入口；本切片只扩展这一既有 overlay，不新增 Desk 或将阅读设置混进作品元数据。
+
+- 偏好：字号（fontScale）、主题（明/暗/跟随系统）、自动保存进度开关、reducedMotion（PRD 5.6/7.1）。
+- 存储：使用 DataStore Preferences；它们是全局用户偏好，不写入 Room，也不附着到 `LocalLibraryEntry`。
+- 应用：fontScale / reducedMotion 映射到 `ReaderSettings`；主题映射到 Compose 主题。运行时设置变更走既有 `updateSettings`，不得以切换偏好为由重建 `ReaderRuntimeHost`。
+- 进度开关：关闭前先 flush 当前会话已节流但尚未落库的进度；关闭后停止后续节流写入，重新开启后恢复既有 5 秒 / 2% 阈值策略。
+- 范围外：不做每作品覆盖，不改 `.kmd` frontmatter，不在本切片加入缓存清理、账号或云端同步。
+
+验收：重启应用后偏好仍在；阅读中的字号和 reduced motion 生效且 runtime 不重建；主题切换不改变播放会话；自动保存开关不会丢弃关闭前已产生的进度；单测覆盖默认值、持久化恢复、开关 flush/停止写入与 runtime settings 映射。
 
 ### R3-J. 笔记/书签（视精力，纯预留或最小实现）
 - local_annotations 表 + 基础 CRUD
@@ -558,8 +577,9 @@ R3-A 数据层（entry + revision + drafts [+ annotation]，无依赖）
   └─→ R3-J 笔记/书签（视精力）
 ```
 
-建议顺序：A → B → C → D → E → F → G → H → I，J 视精力。
-I（设置）独立无依赖，可与 D/E/F 并行。
+已完成：A → B → C → D → E → F。
+
+下一顺序：先完成 R1 错误恢复与 R2 companion/横屏手测作为体验质量门；本地资产线执行 G → H；I 是独立的下一 UI 优化，可在 G/H 期间并行设计或实现；J 视精力。
 
 ## 5. 验收
 

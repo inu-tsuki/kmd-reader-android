@@ -85,7 +85,7 @@ interface LocalLibraryRepository {
     suspend fun getShelf(): List<LocalLibraryEntry>
     suspend fun getHistory(): List<LocalLibraryEntry>
     suspend fun upsertEntry(entry: LocalLibraryEntry)
-    suspend fun updateProgress(workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long)
+    suspend fun updateProgress(workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long, revisionId: String? = null)
     suspend fun setOnShelf(workId: String, onShelf: Boolean)
     suspend fun removeEntry(workId: String)
 
@@ -128,14 +128,20 @@ class RoomLocalLibraryRepository(
         progress: Float,
         timeMs: Long?,
         durationMs: Long?,
-        now: Long
+        now: Long,
+        revisionId: String?
     ) {
         val existing = libraryDao.getByWorkId(workId) ?: return
+        // F4：durationMs=null 表示当前事件未携带 duration（runtime 未上报），不应清除
+        // 已有的可靠基准。progress 和 timeMs 是即时状态值，允许 null 覆盖。
+        // F4-rev：revisionId 同策略——null 不覆盖已有身份，非 null 则更新。
+        // 进度携带 revision 身份，restoreSeekOnReady 据此判断是否换源/换版本。
         libraryDao.upsert(
             existing.copy(
                 readingProgress = progress,
                 readingTimeMs = timeMs,
-                readingDurationMs = durationMs,
+                readingDurationMs = durationMs ?: existing.readingDurationMs,
+                activeRevisionId = revisionId ?: existing.activeRevisionId,
                 lastReadAt = now
             )
         )
@@ -207,9 +213,20 @@ class InMemoryLocalLibraryRepository(
         progress: Float,
         timeMs: Long?,
         durationMs: Long?,
-        now: Long
+        now: Long,
+        revisionId: String?
     ) {
-        entries[workId]?.let { entries[workId] = it.copy(readingProgress = progress, readingTimeMs = timeMs, readingDurationMs = durationMs, lastReadAt = now) }
+        entries[workId]?.let {
+            // F4：同 Room 实现——durationMs=null 不清除已有基准。
+            // F4-rev：revisionId 同策略。
+            entries[workId] = it.copy(
+                readingProgress = progress,
+                readingTimeMs = timeMs,
+                readingDurationMs = durationMs ?: it.readingDurationMs,
+                activeRevisionId = revisionId ?: it.activeRevisionId,
+                lastReadAt = now
+            )
+        }
     }
 
     override suspend fun setOnShelf(workId: String, onShelf: Boolean) {

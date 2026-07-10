@@ -1,6 +1,6 @@
 # KMD Reader Android 文档索引
 
-> 最近更新：2026-06-16
+> 最近更新：2026-07-10
 
 `docs/` 按用途分成三类：开发规划、知识库、归档。新增文档时先判断它是“接下来要做什么”，还是“长期事实是什么”，或只是“历史记录”。
 
@@ -19,6 +19,7 @@
 - [第二阶段计划](planning/stages/stage-2-plan.md)：MVP、页面流转、数据实体和仓库结构。
 - [第三阶段数据与网络规划](planning/stages/stage-3-data-network-plan.md)：Retrofit、Room、Repository 与测试。
 - [第五阶段集成测试报告](planning/stages/stage-5-integration-test-report.md)：集成测试用例、Bug 清单和性能检查记录。
+- [R3 完善本地阅读器规划](planning/r3-local-reader-plan.md)：本地数据、导入、书架与阅读偏好的当前工作包；R3-F 已落地，R3-I 是下一 UI 优化切片。
 
 Runtime 相关计划应以主仓库协议文档 `docs/knowledge/integration/android-webview-runtime-protocol.md` 作为契约源。
 

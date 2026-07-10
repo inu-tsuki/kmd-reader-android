@@ -1,6 +1,6 @@
 # Android Reader Planning
 
-> 最近更新：2026-06-15
+> 最近更新：2026-07-10
 
 这里保存仍会影响 Android Reader 后续开发顺序的计划文档。
 
@@ -26,5 +26,5 @@
 
 ## R3 工作包文档
 
-- [R3 完善本地阅读器规划](r3-local-reader-plan.md)
+- [R3 完善本地阅读器规划](r3-local-reader-plan.md)：R3-F 已落地；R3-G/H 本地资产动作与 R3-I 阅读偏好是后续切片。
 - [R3-D 本地导入调研与方案讨论](r3-d-local-import-research.md)（调研稿，未定论：frontmatter drift 核实、`.kmdwork` 打包格式选项、待拍板问题）

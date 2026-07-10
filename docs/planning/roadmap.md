@@ -1,7 +1,7 @@
 # KMD Reader Android Roadmap
 
 > 文档状态：当前路线
-> 最近更新：2026-06-17
+> 最近更新：2026-07-10
 
 ## 1. 当前判断
 
@@ -23,7 +23,7 @@ Android Reader 已经越过“课程作业骨架”阶段，进入“真实移�
 
 已经具备：
 
-- 课程 MVP 主流程：作品列表、详情、阅读入口、搜索/筛选、审阅入口、导入入口占位。
+- 课程 MVP 主流程：作品列表、详情、阅读入口、搜索/筛选、审阅入口，以及 SAF 本地导入。
 - 数据层：Retrofit API、Room Entity/Dao/Database、Repository、offline-first 流程和单元测试。
 - ViewModel 层：`StateFlow` UI 状态、runtime bridge 事件归约、失败状态保护。
 - WebView runtime host：可打包消费 `dist/reader-runtime`，可加载真实 `reader-runtime-web`。
@@ -33,16 +33,17 @@ Android Reader 已经越过“课程作业骨架”阶段，进入“真实移�
 - 阅读 companion：Review / Issues companion、源码上下文、issue focus 和行级上下文气泡已完成首轮骨架。
 - Runtime 可诊断性：renderer 退出报告、bridge trace、host breadcrumbs、visual debug probe 开关。
 - Viewport 策略：`.kmd` stage 设计画布优先，`Work.presentation` fallback，阅读类文档保持自适应方向。
+- R3 本地链路：`LocalLibraryEntry`、阅读进度、本地 issue 草稿、裸 `.kmd` / `.kmdwork` 导入、bundle asset host 和本地 revision 播放优先级已落地。
+- R3-F 书架 UI：书架与阅读历史分离、进度/时间显示、继续阅读入口，以及设置/关于入口已落地。
 - 文档体系：PRD、页面架构、应用架构、UI 设计、runtime UI 实施计划、第五阶段测试报告已分层整理。
 
 仍未完成或待打磨：
 
 - Review / Issues companion 已迁入 `ReaderCompanionContainer`，但还需要模拟器/真机手测尺寸、滚动、关闭手感和 WebView 不重建。
 - 审阅源码上下文、issue 定位和本地 issue draft 已有首轮骨架；discussion anchor、后端持久化和正式提交仍待 community-api 演进。
-- 横屏舞台还没有正式的“横屏观看”按钮和方向锁定流程。
 - WebView renderer 在 Profiler、频繁 seek、重载或图形压力下仍需继续验证和恢复兜底。
-- runtime `ready` 后未显示首帧、播放 `ended` 后无重置或提示：2026-06-17 smoke 确认链路闭合但用户只看到黑屏（BUG-09）。这是当前最影响"像真实阅读器"观感的缺口，应优先处理。
-- 书架仍未形成真正的本地作品管理、导入持久化、阅读进度和离线缓存。
+- runtime `ready` 后的首帧与 `ended` 呈现仍是产品设计待决项（BUG-09），不能以 runtime 层硬编码替代作者意图。
+- 本地阅读器仍缺少从发现/详情加入书架、详情页续读状态和真正的阅读偏好设置；`SettingsSheet` 目前只承载关于/版本。
 - `Work.presentation` 仍由 mock/API 手写。生成链路属于主仓库生态草案，不进入 Android Reader 近期 roadmap。
 
 ## 3. 当前风险
@@ -52,9 +53,9 @@ Android Reader 已经越过“课程作业骨架”阶段，进入“真实移�
 | runtime ready/ended 首帧视觉 | 设计待决 | BUG-09。非 bug：脚本首帧字符全隐 + 黑画布是脚本语义。首帧渲染 / 书封 / ended 呈现待产品方向明确 |
 | WebView renderer 退出 | 已出现，已有报告 | UI-5 继续做可恢复错误页、重试、返回和诊断入口 |
 | `Work` 与 `.kmd` metadata 双来源 | 已识别 | Android 短期 runtime 以 `.kmd` 为播放事实；生成器路线移到主仓库生态草案 |
-| 横屏舞台在竖屏 letterbox 中体验弱 | 已识别 | 浮层提供“横屏观看”入口，竖屏 letterbox 只作为过渡态 |
+| 横屏舞台在竖屏 letterbox 中体验弱 | 已识别 | 横屏观看入口已落地；方向锁定与播放会话保留仍需真机验证 |
 | Companion 手感与尺寸稳定性 | 已识别 | UI-4 已首轮迁入 `ReaderCompanionContainer`，继续手测 bottom sheet / side panel / Review-Issues 切换 |
-| 书架心智未落地 | 已识别 | R3 做 LocalLibrary、导入、进度、离线状态 |
+| 本地资产操作不完整 | 进行中 | R3-F 已提供书架/历史；后续补加入书架、详情续读与阅读偏好 |
 | Phase B 语言设计牵引过大 | 已识别 | Android 验证线不等待 Phase B；只消费当前 runtime contract |
 
 ## 4. 路线分层
@@ -127,7 +128,7 @@ R2 分成六个切片：
 |---|---|---|
 | UI-1 Chrome 状态化 | 播放控制 visible/dimmed/hidden/pinned | 首轮完成，继续打磨 |
 | UI-2 宿主手势 | 双指轻点切换 chrome，不吃 WebView 单指事件 | 首轮完成，待实机确认 |
-| UI-3 Viewport/横屏 | stage 设计画布、scroll/page 自适应、横屏观看入口 | policy 首轮完成，横屏按钮待做 |
+| UI-3 Viewport/横屏 | stage 设计画布、scroll/page 自适应、横屏观看入口 | 首轮完成；方向锁定与会话保留待真机验证 |
 | UI-4 Companion | 通用附加内容容器，承载 Review / Issues / 行级上下文 | 首轮完成，待手测微调 |
 | UI-5 错误恢复 | runtime 失败可解释、可操作 | 进行中 |
 | UI-6 进度持久化 | 节流保存阅读进度 | **移入 R3**（见下方说明） |
@@ -138,13 +139,13 @@ R2 分成六个切片：
 2. UI-4G 手测：Review / Issues 切换时 WebView 不重建、companion 高度不跳。
 3. UI-4E 手测：bottom sheet / side panel / shared height。
 4. UI-5：错误恢复体验继续收束。
-5. UI-3：在 chrome 上加入“横屏观看”按钮和横屏提示。（已完成，PR #2）
+5. UI-3：验证横屏观看后的会话保留、返回竖屏和 renderer 稳定性。
 
 > UI-6（阅读进度持久化）从 R2 移入 R3。进度数据模型（独立表 vs LocalWork 字段 vs DataStore）本质是 R3 本地数据架构的一部分——进度归属于哪个 work、work 存在哪、外键如何约束，都依赖 R3 的 LocalLibrary / LocalWork 设计。在 R2 用独立 Room 表提前实现会导致外键崩溃（mock 作品不进 Room）或数据归属错乱。R3 统一设计本地数据模型后再实现进度持久化。
 
 ### R3：本地阅读器能力
 
-状态：产品定义完成，功能未完整落地。
+状态：主干能力已落地，进入本地阅读体验收束。
 
 目标：
 
@@ -154,11 +155,8 @@ R2 分成六个切片：
 
 工作：
 
-- 定义 `LocalLibrary` 与 `CommunityDiscovery` 数据边界。
-- 导入 `.kmd` 后生成最小本地 `Work` 记录，保存 source 和 active revision；不实现生态级 `Work.presentation` 生成器。
-- 本地作品进入书架，并可打开详情和阅读页。
-- 阅读进度持久化，书架显示继续阅读。
-- 支持移除本地作品、清理缓存和空状态。
+- 已完成：`LocalLibrary` 与 `CommunityDiscovery` 数据边界、阅读进度和本地草稿持久化、裸 `.kmd` / `.kmdwork` 导入、bundle 资产加载、本地 revision 播放优先级，以及书架/阅读历史 UI。
+- 下一步：浏览/详情加入书架、详情页续读状态、阅读偏好设置；移除本地作品、缓存清理和笔记/书签随后按价值评估。
 
 > **进度持久化的数据模型教训（2026-06-17）**：进度数据模型必须与 LocalWork 统一设计，不能提前独立实现。曾尝试在 R2 用独立 Room 表 `ReadingProgressEntity`（外键约束 `workId → works.id`），但 mock 作品走 `MockWorkRepository` 从不写入 Room，导致外键约束失败、恢复进度时崩溃。根因：进度归属的 work 在哪存储是 R3 的核心问题，提前建表会把数据架构决策钉死在错误的假设上。R3 实现 LocalWork 时一并决定进度是 LocalWork 字段、独立表还是 DataStore。
 
@@ -192,12 +190,12 @@ R2 分成六个切片：
 
 ## 6. 下一轮开发建议
 
-建议下一轮按这个顺序做：
+下一轮按两条不互相阻塞的线推进：
 
-1. **R2-4I issue draft 布局**（BUG-13）：从 Review 行气泡「提 issue」进入 Issues 后，draft 表单应占主区，不与 issue 台账嵌套滚动。
-2. **R1-1 错误恢复收束**：让 renderer 退出、source missing、runtime failed 都有统一恢复 UI。
-3. **R2-3 横屏观看按钮与进度保留**：先按钮和提示，再考虑 Activity orientation lock；横屏切换需保留进度（当前未实现）。
-4. **R2-4H/G/E 手测**：companion 尺寸、Review↔Issues handoff、bottom sheet / side panel。
+1. **体验质量门**：R1 错误恢复收束，并完成 R2 companion、横屏会话保留的模拟器/真机手测；它们是后续 UI 扩张的发布条件。
+2. **R3-G/H 本地资产动作**：从发现/详情加入书架，详情页根据持久化进度显示开始阅读或继续阅读与位置摘要。
+3. **R3-I 阅读偏好（下一 UI 优化）**：扩展既有 `SettingsSheet`，实现字号、主题、自动保存进度和 `reducedMotion` 的 DataStore 持久化，并将 runtime 相关偏好接入 `ReaderSettings`。
+4. **R2-4I issue draft 布局**（BUG-13）：从 Review 行气泡进入 Issues 后，draft 表单占主区，避免与 issue 台账嵌套滚动。
 
 注：BUG-09（ready/ended 黑屏）经 2026-06-17 调查降级为**产品设计待决项**——脚本本身首帧字符全隐 + 黑色画布，ready 后黑屏符合脚本语义；是否渲染首帧 / 需要书封 / ended 呈现取决于社区作者意图，runtime 不硬编码。待书封 / 首帧渲染方向明确后再实现。BUG-11/12 已修复（段落级 marker）。正播放跟随交互已实现。
 
@@ -207,6 +205,8 @@ R2 分成六个切片：
 - 单指事件继续进入 WebView。
 - 失败状态不会被 late runtime event 覆盖。
 - 单测和 assemble 通过。
+
+R3-I 的边界：它只管理全局阅读偏好，不引入每作品主题/字号，不改变 `.kmd` 前台元数据，不重建 `ReaderRuntimeHost`；自动保存关闭时必须先安全 flush 当前会话中已节流的进度，再停止后续写入。
 
 ## 7. 暂停事项
 
