@@ -23,7 +23,9 @@ fun BrowseDesk(
     resultCount: Int,
     onOpenSearch: () -> Unit,
     onOpenWork: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    shelfWorkIds: Set<String> = emptySet(),
+    onToggleShelf: ((String) -> Unit)? = null
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -48,7 +50,12 @@ fun BrowseDesk(
             }
         }
         items(works, key = { it.id }) { work ->
-            WorkCard(work = work, onOpen = { onOpenWork(work.id) })
+            WorkCard(
+                work = work,
+                onOpen = { onOpenWork(work.id) },
+                onShelf = work.id in shelfWorkIds,
+                onToggleShelf = onToggleShelf?.let { cb -> { cb(work.id) } }
+            )
         }
     }
 }

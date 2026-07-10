@@ -545,18 +545,28 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 
 **阅读自动记录历史**：无需新代码。当前链路已覆盖——`loadCurrentReaderWork` 在 OpenReader 时创建 `LocalLibraryEntry(onShelf=false)`，`updateProgress` 写 `lastReadAt`，`refreshShelf` 在 `init` / `refreshWorks` / `persistProgressIfNeeded` 后刷新 `shelfState`。从未读过的作品在 DB 里没有 entry，不出现在书架/历史里（正确行为）。
 
-**加入书架**：新增 `ToggleShelf(workId)` action，在详情页 `WorkDetailDesk` 提供「加入书架」/「移出书架」toggle 按钮。
+**加入书架**：新增 `ToggleShelf(workId)` action，在发现页 `WorkCard` 和详情页 `WorkDetailDesk` 提供「加入书架」/「移出书架」toggle 按钮。
 
 - **get-then-upsert 策略**：`setOnShelf` 在 entry 不存在时静默 no-op（`LocalLibraryRepository.kt:151`）。从未读过/未导入的 remote/mock 作品在 DB 里没有行——加入书架时先 `getEntry` 判断，无 entry 则用 `work.toLocalLibraryEntry().copy(onShelf = true)` 创建（不覆盖已有 progress/time，因为无 entry 时本就没有可覆盖的），有 entry 则 `setOnShelf(!existing.onShelf)` 翻转。
 - **Reducer 纯函数**：`ToggleShelf` 是纯副作用（DB 写 + `refreshShelf`），reducer 直接 `state`（no-op）。shelf 状态由 `refreshShelf()` 从 DB 刷新回 `shelfState`，不走 reducer 回写——与 `persistProgressIfNeeded` → `refreshShelf` 的现有模式一致。
-- **UI 状态来源**：详情页的 shelf 状态从 `state.shelfState.shelf.any { it.workId == currentWorkId }` 推导，不新增 state 字段。
+- **UI 状态来源**：详情页 shelf 状态从 `state.shelfState.shelf.any { it.workId == currentWorkId }` 推导；发现页传入 `shelfWorkIds: Set<String>`（`state.shelfState.shelf.map { it.workId }.toSet()`），卡片按 `work.id in shelfWorkIds` 判断。不新增 state 字段。
 - **成功反馈**：`sendEffect(ShowMessage("已加入书架" / "已移出书架"))`，与 import 的 ShowMessage 模式一致。
 
-回归覆盖（KmdReaderViewModelTest 31 → 35）：
+#### 审查修复（PR #11 review）
+
+- **P1 — 发现页缺少加入书架入口**：原 R3-G 只在详情页接入 `ToggleShelf`，发现页 `BrowseDesk` 的 `WorkCard` 没有 shelf toggle。修复：`WorkCard` 新增可选 `onShelf` + `onToggleShelf` 参数（默认 no-op），`BrowseDesk` 新增 `shelfWorkIds: Set<String>` + `onToggleShelf: ((String) -> Unit)?` 参数，`KmdReaderApp` 传入 `state.shelfState.shelf.map { it.workId }.toSet()` + `dispatch(ToggleShelf(it))`。
+- **P1 — 快速连续点击丢 toggle（并发竞态）**：每次 `toggleShelf` 启动独立 coroutine，并发 `getEntry` 可能读到相同 `onShelf` 值再写入相同目标，导致双击只翻转一次。修复：新增 `shelfToggleMutex`（`kotlinx.coroutines.sync.Mutex`），`toggleShelf` 用 `withLock` 串行化整个 getEntry-then-write 周期。单一 Mutex 而非 per-workId map——shelf toggle 是低频操作，全局串行化不构成瓶颈。
+- **P2 — 详情页三按钮窄屏溢出**：三个四字按钮放在不可换行 `Row` 中，360dp 屏幕接近溢出。修复：`WorkDetailDesk` 和 `WorkCard` 按钮区改为 `FlowRow`（`ExperimentalLayoutApi`，已在项目中使用），窄屏自动换行。
+- **文档漂移**：`docs/planning/README.md` 和 `docs/knowledge/architecture/page-architecture.md` 仍将 R3-G 标为后续事项。修复：更新为已落地。
+
+回归覆盖（KmdReaderViewModelTest 31 → 35 → 38）：
 - `toggleShelfAddsNeverReadWorkToShelf` — 无 entry → toggle → entry 创建，onShelf=true
 - `toggleShelfPutsExistingEntryOnShelf` — onShelf=false → toggle → onShelf=true，shelf 包含、history 排除
 - `toggleShelfRemovesFromShelf` — onShelf=true → toggle → onShelf=false，shelf 排除
 - `toggleShelfCreatesEntryWithDefaultFieldsWhenNoneExists` — 无 entry → toggle → 新 entry 的 progress/time/importedAt 均为默认值
+- `rapidToggleShelfTogglesExactlyTwice` — 连续两次 toggle → onShelf 翻转两次（回到原值），验证 mutex 串行化
+- `toggleShelfFromBrowseDeskActionWorks` — BrowseDesk 的 ToggleShelf action 走同一路径
+- `toggleShelfNoOpWhenWorkNotInCatalog` — workId 不在 works 列表且无 entry → 不创建空 entry
 
 ### R3-H. 详情页「继续阅读」按钮态
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）

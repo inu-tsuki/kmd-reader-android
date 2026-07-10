@@ -8,6 +8,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -175,8 +177,15 @@ fun PreviewFrame(work: Work, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun WorkCard(work: Work, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+fun WorkCard(
+    work: Work,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+    onShelf: Boolean = false,
+    onToggleShelf: (() -> Unit)? = null
+) {
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -212,12 +221,18 @@ fun WorkCard(work: Work, onOpen: () -> Unit, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // FlowRow：窄屏自动换行，避免三个按钮横向溢出。
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onOpen) {
                     Text("打开详情")
                 }
                 OutlinedButton(onClick = onOpen) {
                     Text("预览属性")
+                }
+                if (onToggleShelf != null) {
+                    OutlinedButton(onClick = onToggleShelf) {
+                        Text(if (onShelf) "移出书架" else "加入书架")
+                    }
                 }
             }
         }

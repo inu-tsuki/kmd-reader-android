@@ -1754,6 +1754,71 @@ class KmdReaderViewModelTest {
         assertNull(entry.importedAt)
     }
 
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun rapidToggleShelfTogglesExactlyTwice() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // 预置 entry，onShelf=false。
+        localLibrary.upsertEntry(
+            shelfEntry("glass-rail", onShelf = false, importedAt = null, lastReadAt = null)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        // 连续两次 toggle：false → true → false。mutex 串行化后应翻转两次。
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        advanceUntilIdle()
+
+        // 两次翻转后应回到初始值 false。无 mutex 时并发竞态可能导致两次都读到 false
+        // 并都写入 true，最终只翻转一次（停在 true）。
+        assertEquals(
+            "rapid double toggle must net to original value (mutex serializes)",
+            false,
+            localLibrary.getEntry("glass-rail")?.onShelf
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfFromBrowseDeskActionWorks() = runTest {
+        // BrowseDesk dispatches ToggleShelf(workId) with the specific work's id,
+        // 不依赖 deskStack.currentWorkId。验证此路径正确执行。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        // 模拟 BrowseDesk 的 onToggleShelf("star-manual") dispatch。
+        viewModel.onAction(KmdReaderAction.ToggleShelf("star-manual"))
+        advanceUntilIdle()
+
+        assertEquals(true, localLibrary.getEntry("star-manual")?.onShelf)
+        assertTrue(viewModel.state.value.shelfState.shelf.any { it.workId == "star-manual" })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfNoOpWhenWorkNotInCatalog() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        // workId 不在 works 列表且无 entry → toggle 不创建空 entry。
+        viewModel.onAction(KmdReaderAction.ToggleShelf("nonexistent-work"))
+        advanceUntilIdle()
+
+        assertNull(localLibrary.getEntry("nonexistent-work"))
+    }
+
     /** R3-F 测试 helper：构建可定制的 LocalLibraryEntry。 */
     private fun shelfEntry(
         workId: String,

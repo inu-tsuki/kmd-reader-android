@@ -2,7 +2,8 @@ package com.example.kmd_reader.ui.screen.work
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +22,7 @@ import com.example.kmd_reader.ui.component.StatRow
 import com.example.kmd_reader.ui.component.TagRow
 import com.example.kmd_reader.ui.component.WorkMetaChips
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WorkDetailDesk(
     work: Work?,
@@ -63,7 +65,8 @@ fun WorkDetailDesk(
             StatRow("复杂度", work.attributes.complexityLevel.label)
             StatRow("Runtime", work.attributes.runtimeVersion)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // FlowRow：窄屏/大字体下自动换行，避免三个按钮横向溢出。
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = onOpenReader) {
                 Text("开始阅读")
             }
