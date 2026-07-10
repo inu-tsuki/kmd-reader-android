@@ -1870,6 +1870,64 @@ class KmdReaderViewModelTest {
         )
     }
 
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun staleShelfRefreshDoesNotOverwriteToggleResult() = runTest {
+        // R3-G-rev2：跨生产者刷新竞态。
+        // 场景：init 的 fire-and-forget refreshShelf 读到旧 shelf 后挂起；
+        // toggle 写库+递增 generation+刷新+回写正确状态；
+        // init 的旧刷新恢复后 generation 不匹配 → 丢弃，不覆盖 toggle 的最终 UI 状态。
+        //
+        // 关键：gated getShelf 必须返回创建时的快照值（旧 shelf，glass-rail onShelf=true），
+        // 而不是释放后的实时值。否则 gate 释放后 getShelf 读到 toggle 写入后的新状态，
+        // 即使无 generation guard 也能回写正确结果——测试无法证明 guard 必要。
+        //
+        // init 有两个 refreshShelf 调用点（直接 + refreshWorks 成功后），gateCount=2 挂起两者。
+        // toggle 的 refreshShelfNow 走 delegate（gateCount 已耗尽），读实时正确值。
+        val delegate = InMemoryLocalLibraryRepository()
+        // 预置 entry：glass-rail 在书架上。
+        delegate.upsertEntry(
+            shelfEntry("glass-rail", onShelf = true, importedAt = 1000L, lastReadAt = null)
+        )
+        // 快照：gate 创建时的 shelf 状态（glass-rail onShelf=true）。
+        val shelfSnapshot = delegate.getShelf()
+        val historySnapshot = delegate.getHistory()
+        val getShelfGate = CompletableDeferred<Unit>()
+        val localLibrary = GatedShelfRepository(
+            delegate = delegate,
+            gate = getShelfGate,
+            gateCount = 2,
+            shelfSnapshot = shelfSnapshot,
+            historySnapshot = historySnapshot
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+        // init 的两个 refreshShelf 都挂起在 gate 上。shelfState 仍是初始空态。
+
+        // toggle：移出书架。toggle 在 mutex 内写 DB（onShelf=false），
+        // 递增 generation，调 refreshShelfNow（走 delegate.getShelf，不挂起），回写正确状态。
+        viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
+        advanceUntilIdle()
+
+        assertFalse(
+            "toggle's refresh must be reflected (glass-rail removed from shelf)",
+            viewModel.state.value.shelfState.shelf.any { it.workId == "glass-rail" }
+        )
+
+        // 释放 gate——两个 stale refresh 恢复，读到快照（旧 shelf，glass-rail onShelf=true），
+        // 但 generation 不匹配 → 丢弃，不覆盖。
+        getShelfGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(
+            "stale refresh must not overwrite toggle's result (generation guard)",
+            viewModel.state.value.shelfState.shelf.any { it.workId == "glass-rail" }
+        )
+    }
+
     /** R3-F 测试 helper：构建可定制的 LocalLibraryEntry。 */
     private fun shelfEntry(
         workId: String,
@@ -2026,6 +2084,64 @@ private class ControllableLocalLibraryRepository(
     override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
     override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
     override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
+    override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
+}
+
+/**
+ * R3-G-rev2：前 [gateCount] 次 `getShelf()` 调用挂起在 [gate] 上，释放后返回 [shelfSnapshot]
+ * （创建时的快照值，不是释放后的实时值）。`getHistory()` 在 gate 未完成时也返回 [historySnapshot]。
+ * 之后的调用委派给 [delegate]。
+ *
+ * 用于制造跨生产者刷新竞态：如果 gate 释放后仍读 delegate 实时值，stale refresh 会读到
+ * toggle 写入后的正确状态，即使无 generation guard 也能回写正确结果——测试无法证明 guard 必要。
+ * 返回快照后：无 guard 时 stale refresh 回写旧状态覆盖 toggle 的最终状态（测试失败）；
+ * 有 guard 时 generation 不匹配 → 丢弃（测试通过）。
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+private class GatedShelfRepository(
+    private val delegate: LocalLibraryRepository,
+    private val gate: CompletableDeferred<Unit>,
+    private val gateCount: Int,
+    private val shelfSnapshot: List<LocalLibraryEntry>,
+    private val historySnapshot: List<LocalLibraryEntry>
+) : LocalLibraryRepository {
+    private var gatedCallsRemaining = gateCount
+
+    override suspend fun getShelf(): List<LocalLibraryEntry> {
+        if (gatedCallsRemaining > 0) {
+            gatedCallsRemaining--
+            gate.await()
+            return shelfSnapshot
+        }
+        return delegate.getShelf()
+    }
+
+    override suspend fun getEntry(workId: String): LocalLibraryEntry? = delegate.getEntry(workId)
+    override suspend fun getHistory(): List<LocalLibraryEntry> {
+        // 如果 gate 未完成，说明这是 stale refresh 的 getHistory——返回快照。
+        // gate 完成后（toggle 的刷新走 delegate），走 delegate 实时值。
+        if (!gate.isCompleted) return historySnapshot
+        return delegate.getHistory()
+    }
+    override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
+    override suspend fun updateProgress(
+        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long, revisionId: String?
+    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
+    override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
+        delegate.setOnShelf(workId, onShelf)
+    override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        delegate.getLatestRevision(workId)
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        delegate.findRevisionByContentHash(workId, contentHash)
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        delegate.getRevisionsForWork(workId)
+    override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
+    override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
+    override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun getDraftsByType(workId: String, type: String): List<LocalDraft> =
+        delegate.getDraftsByType(workId, type)
     override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
     override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
 }

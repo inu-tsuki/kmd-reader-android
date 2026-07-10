@@ -77,6 +77,13 @@ class KmdReaderViewModel(
     // （两次并发 toggle 可能读到相同 onShelf 值，写入相同目标，导致双击只翻转一次）。
     private val shelfToggleMutex = kotlinx.coroutines.sync.Mutex()
 
+    // R3-G-rev2：shelf 状态刷新的 generation token。每次 toggle 写完 DB 后递增，
+    // 令所有此前已启动但尚未回写的 fire-and-forget 刷新结果作废。
+    // 场景：进度刷新（persistProgressIfNeeded → refreshShelf）读到旧 shelf 后挂起，
+    // toggle 写库+刷新+回写正确状态+递增 generation，旧刷新恢复后 generation 不匹配，
+    // 丢弃旧结果，不覆盖最终状态。
+    private val shelfRefreshGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
     companion object {
         // 播放期间进度落盘节流间隔。单本 20min 作品写 ~240 次，断电最多丢 5s 进度。
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
@@ -1135,20 +1142,26 @@ class KmdReaderViewModel(
      * 纯用 [LocalLibraryEntry] 数据组装 [ShelfItem]，不 join [Work]——entry 自带 title/authorName/presentationMode。
      * 在 init 和 refreshWorks 成功后调用，确保导入/阅读后书架即时刷新。
      *
-     * R3-G-rev：拆出 suspend [refreshShelfNow]，让 mutex 内的 toggle 能 await 刷新完成，
-     * 防止两次 toggle 的锁外刷新竞态（第一次读旧 shelf 后挂起，第二次先回写最终状态，
-     * 第一次再把旧状态覆盖回来）。非 mutex 调用点用此 fire-and-forget 包装。
+     * R3-G-rev：拆出 suspend [refreshShelfNow]，让 mutex 内的 toggle 能 await 刷新完成。
+     * R3-G-rev2：引入 [shelfRefreshGeneration] token。每次刷新开始时捕获当前 generation，
+     * 回写前校验：不匹配则丢弃（说明 toggle 已在期间写入更新状态）。这关闭了跨生产者竞态——
+     * 进度刷新等 fire-and-forget 路径的迟到结果不会覆盖 toggle 的最终 UI 状态。
      */
     private fun refreshShelf() {
         viewModelScope.launch { refreshShelfNow() }
     }
 
     private suspend fun refreshShelfNow() {
+        val generation = shelfRefreshGeneration.get()
         val shelf = localLibrary.getShelf().map { it.toShelfItem() }
         val history = localLibrary.getHistory()
             .filter { !it.onShelf }
             .map { it.toShelfItem() }
-        _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
+        // 丢弃迟到结果：如果 toggle 在此刷新的 DB 读取期间递增了 generation，
+        // 说明已有更新的 shelf 状态被回写，此旧结果不应覆盖。
+        if (shelfRefreshGeneration.get() == generation) {
+            _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
+        }
     }
 
     /**
@@ -1165,6 +1178,9 @@ class KmdReaderViewModel(
      * - `shelfToggleMutex` 串行化整个 getEntry-then-write-then-refresh 周期。
      *   使用单一 Mutex 而非 per-workId map：shelf toggle 是低频操作，全局串行化不构成瓶颈。
      * - no-op 路径（workId 不在 works 且无 entry）不写 DB、不刷新、不提示。
+     * - R3-G-rev2：写完 DB 后递增 `shelfRefreshGeneration`，令所有此前已启动但尚未回写的
+     *   fire-and-forget 刷新（init/refreshWorks/persistProgressIfNeeded）的迟到结果作废。
+     *   toggle 自己的刷新在递增后启动，使用新 generation，不会被自己作废。
      */
     private fun toggleShelf(workId: String) {
         viewModelScope.launch {
@@ -1184,6 +1200,9 @@ class KmdReaderViewModel(
                     }
                 }.onSuccess {
                     if (wroteSomething) {
+                        // 递增 generation：令此前已启动但尚未回写的 fire-and-forget
+                        // 刷新的迟到结果作废，不覆盖 toggle 的最终 UI 状态。
+                        shelfRefreshGeneration.incrementAndGet()
                         refreshShelfNow()
                         val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
                         sendEffect(

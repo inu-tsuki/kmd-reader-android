@@ -123,6 +123,9 @@ class RoomLocalLibraryRepository(
         libraryDao.upsert(entry.toEntity())
     }
 
+    // R3-G-rev3：字段级原子 UPDATE，不再 read-modify-write。
+    // 旧实现用 getByWorkId → copy → upsert，在 toggle 和 updateProgress 并发时互相覆盖。
+    // durationMs/revisionId=null 时 DAO 的 COALESCE 保留已有值（F4/F4-rev 语义）。
     override suspend fun updateProgress(
         workId: String,
         progress: Float,
@@ -131,25 +134,14 @@ class RoomLocalLibraryRepository(
         now: Long,
         revisionId: String?
     ) {
-        val existing = libraryDao.getByWorkId(workId) ?: return
-        // F4：durationMs=null 表示当前事件未携带 duration（runtime 未上报），不应清除
-        // 已有的可靠基准。progress 和 timeMs 是即时状态值，允许 null 覆盖。
-        // F4-rev：revisionId 同策略——null 不覆盖已有身份，非 null 则更新。
-        // 进度携带 revision 身份，restoreSeekOnReady 据此判断是否换源/换版本。
-        libraryDao.upsert(
-            existing.copy(
-                readingProgress = progress,
-                readingTimeMs = timeMs,
-                readingDurationMs = durationMs ?: existing.readingDurationMs,
-                activeRevisionId = revisionId ?: existing.activeRevisionId,
-                lastReadAt = now
-            )
-        )
+        // 0 rows preserves the repository contract: progress for a missing entry is a no-op.
+        libraryDao.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
     }
 
+    // R3-G-rev3：字段级原子 UPDATE，只更新 onShelf，不覆盖 progress/time 等字段。
     override suspend fun setOnShelf(workId: String, onShelf: Boolean) {
-        val existing = libraryDao.getByWorkId(workId) ?: return
-        libraryDao.upsert(existing.copy(onShelf = onShelf))
+        // 0 rows preserves the repository contract: callers create missing entries explicitly.
+        libraryDao.setOnShelf(workId, onShelf)
     }
 
     override suspend fun removeEntry(workId: String) {

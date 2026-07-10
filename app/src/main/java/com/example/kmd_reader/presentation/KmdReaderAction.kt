@@ -29,7 +29,7 @@ sealed interface KmdReaderAction {
     data object OpenSettings : KmdReaderAction
     /** R3-F：关闭设置/关于 overlay。 */
     data object CloseSettings : KmdReaderAction
-    /** R3-G：加入/移出书架（详情页 toggle）。 */
+    /** R3-G：加入/移出书架（发现页 WorkCard + 详情页 WorkDetailDesk toggle）。 */
     data class ToggleShelf(val workId: String) : KmdReaderAction
     data object OpenImport : KmdReaderAction
     /** R3-D3：SAF picker 选中文件后，携带 Uri 交给 VM 执行导入。 */
