@@ -89,8 +89,8 @@ interface LocalLibraryRepository {
     suspend fun setOnShelf(workId: String, onShelf: Boolean)
     suspend fun removeEntry(workId: String)
 
-    // 提交级（commit 模型，§2.7）
-    suspend fun getLatestRevision(workId: String): LocalRevision?
+  // 提交级（commit 模型，§2.7）。append-only：调用方负责生成新 id，不覆写已有提交。
+  suspend fun getLatestRevision(workId: String): LocalRevision?
     suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision?
     suspend fun getRevisionsForWork(workId: String): List<LocalRevision>
     suspend fun saveRevision(revision: LocalRevision)
@@ -159,10 +159,10 @@ class RoomLocalLibraryRepository(
     override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
         revisionDao.getRevisionsForWork(workId).map { it.toDomain() }
 
-    // 提交不可变：直接 upsert（同 id 覆盖，但语义上调用方应只写新 id）。
+    // append-only：DAO ABORT 保证同 id 重复 insert 抛异常。调用方应写新 id。
     // 不覆写 createdAt——提交时间由调用方提供。
     override suspend fun saveRevision(revision: LocalRevision) {
-        revisionDao.upsert(revision.toEntity())
+        revisionDao.insert(revision.toEntity())
     }
 
     override suspend fun clearRevisionsForWork(workId: String) {
@@ -231,9 +231,12 @@ class InMemoryLocalLibraryRepository(
     override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
         revisions.filter { it.workId == workId }.sortedByDescending { it.createdAt }
 
-    // 提交不可变：同 id 先移除再添加（保持单条），但不覆写 createdAt。
+    // append-only 模拟 DAO ABORT：同 id 重复写入抛异常，不静默覆写。
+    // 内存层用 require 兜底（Room 层由 DB ABORT 保证），保持单条语义。
     override suspend fun saveRevision(revision: LocalRevision) {
-        revisions.removeAll { it.id == revision.id }
+        require(revisions.none { it.id == revision.id }) {
+          "revision id conflict (append-only): ${revision.id}"
+        }
         revisions.add(revision)
     }
 

@@ -215,13 +215,17 @@ LocalRevision（本地提交）
   ├─ workId: String（外键 → local_library.workId，CASCADE）
   ├─ parentRevisionId: String?（父提交：上一个本地提交 id，或 origin 云端 revisionId；首个提交可为 null）
   ├─ contentHash: String（source 内容哈希；去重与本地/云端关联用，不作唯一身份）
-  ├─ sourcePath: String（指向 filesDir/bundles/<bundleId>/revisions/<revId>.kmd 的全量快照；source 不内联 Room——2026-07-08 采纳 spike §6.4）
+  ├─ sourcePath: String（filesDir 下的相对路径，指向全量 source snapshot；source 不内联 Room——2026-07-08 采纳 spike §6.4）
   ├─ storageMode: String（恒 "full"；diff 模型预留位，未来切换不破坏 schema）
   ├─ message: String?（提交说明）
   ├─ syncState: String（"local" = 本地领先 / "synced" = 已推送云端）
   ├─ remoteRevisionId: String?（推送成功后云端 revisionId，origin mapping）
   └─ createdAt: Long（提交不可变，无 updatedAt）
 ```
+
+`sourcePath` 不等同于 `bundleId` 路径。按作品形态分两类：
+- `.kmdwork` / `bundleId != null`：写 `bundles/<bundleId>/revisions/<revId>.kmd`，与 bundle store 同根。
+- 裸 `.kmd` / `bundleId == null`：写 `local-revisions/<workKey>/revisions/<revId>.kmd`，其中 `workKey` 是由 `workId` 派生的安全单路径段（hash/UUID 均可），不得直接信任任意外部 `workId` 作为目录名。原始导入 source 仍可留在 `LocalLibraryEntry.kmdSource` 快捷路径；一旦存在本地提交，播放优先读取 `sourcePath` 指向的 snapshot。
 
 与原 outbox schema 的差异：`baseRevisionId` → `parentRevisionId`（从"基于哪个云端版本"泛化为提交父指针，本地提交可以链式相接）；`label` → `message`；`synced: Boolean` → `syncState`；新增 `contentHash`；删去 `updatedAt`（提交不可变，修改即新提交）。
 
@@ -230,8 +234,9 @@ LocalRevision（本地提交）
 **对 R3-A 已交付实体的影响**：`LocalRevisionEntity` 已按旧 outbox schema 建表（migration 2→3），但仍处"仅接口预留"阶段、无生产写入路径。schema 修订与 R3-D1 的 `LocalLibraryEntity` 指针字段**合并为同一次 migration 3→4**（少一次迁移）；现在是改 schema 代价最小的窗口。
 
 **R3 范围（仅接口预留）**：
-- schema 修订 + DAO + Repository 接口（CRUD + getLatestRevision + 按 contentHash 查找）
+- schema 修订 + DAO + Repository 接口（append-only create + read/list/getLatestRevision + 按 contentHash 查找；提交不可变，不提供原地更新语义）
 - 播放链路优先读取（getWorkSource 改造）
+- 不新增用户可触发的本地提交入口；R3-E 只为测试、后续 `.kmdwork` revision manifest 导入、editor / cloud revision 接入预留写入面
 - **不做**编辑 UI（源文本编辑器是重度工作，留后续切片）
 - **不做**diff 视图、revision 历史浏览 UI、云端同步链路（依赖云端 revisions API + 协作体系）
 
@@ -482,6 +487,19 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - 展开层：`BundleStore.ensureExtracted(bundleId)` 把 `filesDir/bundles/<bundleId>/{assets,scripts}` 复制到 `cacheDir/runtime-extract/<bundleId>/`（idempotent，半解失败清理 cache）；ViewModel `loadCurrentReaderWork` 在 `runtimeBridge.load` 前按 baseUrl 解析 bundleId 调用。展开缓存子目录名由 `BundleStoreModule.RUNTIME_EXTRACT_DIR` 单一常量定义。
 - shouldInterceptRequest：新增 `BundleAssetHost = "kmd-reader-assets.local"`，命中后 `resolveBundleAssetPath`（纯函数，单测覆盖路径解析 + 穿越 guard）解析 bundleId/rest，`openBundleAsset` 经 `resolveBundleAssetFile` 从 `cacheDir/runtime-extract/<bundleId>/<rest>` 服务（与 ensureExtracted 写入位置引用同一常量对齐）；RuntimeAssetHost 分支不动，两 host 共存。
 
+**R3-E 完成记录（2026-07-09）**：
+- `RevisionSourceStore`（新增 `data/bundle/`）：把 `LocalRevision.sourcePath`（filesDir 下相对路径）解析为实际文件做读写。两类形态由路径本身区分——`.kmdwork` 落 `bundles/<bundleId>/revisions/<revId>.kmd`，裸 `.kmd` 落 `local-revisions/<workKey>/revisions/<revId>.kmd`（`workKey` 由 `workId` SHA-256 前 16 hex 派生，不信任外部 workId 作目录名）。安全 guard 对齐 BundleStore defense-in-depth：禁 `..`/绝对路径/反斜杠/非 `.kmd` 扩展名 + canonical guard 防符号链接逃逸。写入 atomic（tmp + rename）。路径构造 helper `bundleRevisionPath` / `plainKmdRevisionPath` 暴露给调用方构造 sourcePath。
+- DAO append-only 收紧：`LocalRevisionDao` `@Insert(REPLACE)` → `@Insert(ABORT)`，同 id 重复 insert 抛冲突异常，强制调用方写新 id。`LocalLibraryRepository.saveRevision` 接口注释点明 append-only；Room 实现改调 `revisionDao.insert`；InMemory 实现用 `require(id !in revisions)` 模拟 ABORT。补 `revisionInsertDuplicateIdThrows` 测试验证 DB 层 ABORT。
+- getWorkSource 播放优先级（§2.7）：`LocalAwareWorkRepository.getWorkSource` 在 isLocalEntry 分支内、kmdSource/bundleStore 快捷路径之前插入 revision 优先级——`getLatestRevision(workId)` 命中且 `revisionSourceStore.readSource(sourcePath)` 读到内容时优先返回。revision 记录存在但 source 文件丢失（bundle 被删/文件损坏）→ fallback 到下一优先级（kmdSource/bundleStore），因为 R3-E 是接口预留、生产写入面尚未接入，残缺 revision 不应阻塞已有 source 的播放。
+- `KmdReaderAppContainer` 注入 `RevisionSourceStore(appContext.filesDir)`，`LocalAwareWorkRepository` 构造加 `revisionSourceStore: RevisionSourceStore? = null` 参数。
+- 回归测试：`RevisionSourceStoreTest`（bundle/裸 .kmd round-trip + 穿越 guard + canonical symlink guard + 非 .kmd 拒绝 + delete + miss + workKey 派生）；`LocalAwareWorkRepositoryTest` 扩展 3 条（revision 优先于 kmdSource、revision 文件丢失 fallback、revision 优先于 BundleStore）；`KmdReaderDatabaseTest` 补 ABORT 测试。
+- 未做：编辑 UI、用户可触发本地提交入口、diff 视图、revision 历史 UI、云端同步链路、`.kmdwork` revision manifest 导入解析（后续切片）。
+
+**R3-E 审查修复（2026-07-09）**：
+- **版本身份一致（High）**：`toWork()` 原把 `Work.script.activeRevisionId` 映射成 `LocalLibraryEntry.activeRevisionId ?: "local"`（导入时写死的指针），但 `getWorkSource()` 读 `getLatestRevision(workId)` 的 source。保存新 revision 后，播放内容来自 `rev-local-1` 但 runtime snapshot / issue draft / `Work.script` 仍标 `"local"` 或旧 `exportRevisionId`——内容与身份脱节。修复：`toWork()` 从文件级私有函数改为 `LocalAwareWorkRepository` 的 `suspend` 成员方法，内部调 `localLibrary.getLatestRevision(workId)` 投影最新 revision 的 `id/contentHash/message/createdAt` 到 `Work.script`；无 revision 时回退 entry 指针。`listWorks` / `getWork` 调用方不需改（suspend map 合法）。回归测试 4 条：`getWork_activeRevisionIdMatchesLatestRevision`、`getWork_fallsBackToEntryRevisionIdWhenNoRevision`、`listWorks_activeRevisionIdMatchesLatestRevision`、`getWork_getWorkSource_identityConsistency`（核心断言：`work.script.activeRevisionId` 与实际播放的 revision id 一致）。
+- **missing source fallback 边界一致（二轮 Medium）**：`getWorkSource()` 在 latest revision 记录存在但 source 文件缺失时 fallback 到 kmdSource / BundleStore 播放旧内容，但 `toWork()` 无条件投影 latest revision，导致"播放旧 source 但 Work.script 标缺文件的 revision"脱节。修复：`toWork()` 只投影"source 可读的 latest revision"——`revisionSourceStore.readSource(sourcePath) != null` 才投影，否则回退 entry 指针，与 `getWorkSource()` 的 fallback 分支对齐。回归测试 `getWork_doesNotProjectRevisionWhenSourceFileMissing`：revision 记录存在但文件缺失时 `Work.script.activeRevisionId` 标 entry 级 `"local"` 而非 `"rev-missing"`，`getWorkSource` 返回 kmdSource，两者不脱节。
+- **writeSource 覆写保护（Medium）**：`RevisionSourceStore.writeSource()` 类注释承诺"不原地覆写已有 sourcePath"，但 `renameTo(file)` 可替换目标文件、fallback `copyTo(file, overwrite = true)` 明确覆写。DAO ABORT 只防重复 revision id，不防不同 revision 指向同一 sourcePath，也不防先写文件后 DB insert 失败导致旧 snapshot 被改写。修复：写入前检查目标文件已存在则抛 `IllegalStateException`；fallback `copyTo` 改 `overwrite = false`（双重保护）。回归测试 2 条：`writeSourceRefusesToOverwriteExistingFile`（原内容不变）、`writeSourceDifferentRevisionsDoNotCollide`（同目录不同 revId 互不覆写）。
+
 #### 主仓库核实结论（2026-07-08，关闭 spike §4.6 第一开放项）
 - runtime 字体全部经原生 **FontFace API** 加载（主仓库 `core/App.ts:290-298`），URL 由 `RuntimeAssetPolicy.resolveRuntimeAssetUrl` 按 `assetManifest.baseUrl` 解析；FontFace 的 `url()` 请求走 WebView 资源加载管线，**可被 `shouldInterceptRequest` 拦截**——现有 runtime 随包字体正是这样经 `kmd-reader-runtime.local` 加载的（`reader-runtime-web-bundle.md`）。
 - FontFace 注册成功后不再重复走 Pixi `Assets.load`；Android WebView 下无宿主 fonts 清单时跳过 20MB+ 默认字体（`kmdLoadDefaultFonts=1` 可强制）——bundle 自带字体经 `assetManifest.fonts → collectRuntimeFonts → FontFace`，主仓库链路已就绪，Android 侧只欠 D4 的 fonts 透传。
@@ -490,10 +508,15 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 
 ### R3-E. 本地提交（仅存储 + 播放链路，不做编辑 UI）
 - local_revisions schema 修订为提交模型（§2.7；migration 3→4 已并入 R3-D1，一次迁移完成两组变更）
-- Repository 接口（CRUD + getLatestRevision + 按 contentHash 查找）
+- Repository 接口（append-only create + read/list/getLatestRevision + 按 contentHash 查找；提交不可变，不提供原地更新语义）
 - 播放链路改造：`getWorkSource(workId)` 优先读最新本地提交 → 否则云端 activeRevision → 否则原始 kmdSource
-- **不做**编辑 UI、diff 视图、revision 历史 UI、云端同步链路
+- **不做**编辑 UI、用户可触发的本地提交入口、diff 视图、revision 历史 UI、云端同步链路
 - 接口为后续（作者纠错 / 审阅者评审 + `.kmdwork` revision manifest + 云端 revisions）预留
+
+**后续收束方向（R3-E 后，不阻塞当前切片）**：
+- ~~将 `getWork()` / `listWorks()` 的 revision 投影与 `getWorkSource()` 的 source 选择收敛为统一 resolver，例如 `resolveLocalPlayable(workId)`。~~ **已落地（2026-07-09）**：`LocalAwareWorkRepository.resolveLocalPlayable(workId)` 统一解析 entry + playableRevision + source，`getWork` / `listWorks` / `getWorkSource` 消费同一结果。`toWork` 不再独立查 `getLatestRevision` + `readSource`，改为直接用 `LocalPlayable.playableRevision` 投影 `Work.script`，从结构上保证身份与播放内容一致。
+- ~~resolver 同时返回 entry、latestRevision、source 与 Work projection，保证 `Work.script.activeRevisionId` 和实际播放 source 来自同一个解析结果。~~ **已落地**：`LocalPlayable` 数据类包含 `entry` / `playableRevision` / `source`，resolver 一次解析供三个路径消费。
+- 真实提交入口出现后，再评估是否把 `LocalLibraryEntry.activeRevisionId/contentHash` 作为 denormalized 快照维护；该写入应由提交 use-case 统一处理，而不是分散在 Repository 调用方。
 
 ### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）
 - MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null）

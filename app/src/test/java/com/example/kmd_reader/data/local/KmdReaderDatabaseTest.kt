@@ -213,8 +213,8 @@ class KmdReaderDatabaseTest {
     @Test
     fun revisionGetLatestReturnsNewestCommit() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 1L))
-        revisionDao.upsert(revisionEntity(id = "rev-2", workId = "rain-city", createdAt = 5L))
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 1L))
+        revisionDao.insert(revisionEntity(id = "rev-2", workId = "rain-city", createdAt = 5L))
 
         val active = requireNotNull(revisionDao.getLatestRevision("rain-city"))
         assertEquals("rev-2", active.id)
@@ -223,7 +223,7 @@ class KmdReaderDatabaseTest {
     @Test
     fun revisionCascadeDeleteWhenLibraryEntryRemoved() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city"))
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city"))
 
         libraryDao.deleteByWorkId("rain-city")
 
@@ -260,7 +260,7 @@ class KmdReaderDatabaseTest {
     @Test
     fun libraryUpsertDoesNotCascadeDeleteRevisions() = runTest {
         libraryDao.upsert(libraryEntry("rain-city", progress = 0f))
-        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city"))
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city"))
 
         // 模拟 updateProgress：read-modify-upsert 路径
         val existing = requireNotNull(libraryDao.getByWorkId("rain-city"))
@@ -289,11 +289,20 @@ class KmdReaderDatabaseTest {
     @Test
     fun revisionUpsertThenClearForWorkEmptiesRevisions() = runTest {
         libraryDao.upsert(libraryEntry("rain-city"))
-        revisionDao.upsert(revisionEntity(id = "rev-1", workId = "rain-city", message = "本地改"))
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", message = "本地改"))
         assertNotNull(revisionDao.getLatestRevision("rain-city"))
 
         revisionDao.clearForWork("rain-city")
 
         assertNull(revisionDao.getLatestRevision("rain-city"))
+    }
+
+    // append-only 语义（§2.7）：同 id 重复 insert 抛异常，不静默覆写。
+    @Test(expected = Exception::class)
+    fun revisionInsertDuplicateIdThrows() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 1L))
+        // 同 id 再 insert → ABORT，抛 SQLite constraint 异常
+        revisionDao.insert(revisionEntity(id = "rev-1", workId = "rain-city", createdAt = 5L))
     }
 }

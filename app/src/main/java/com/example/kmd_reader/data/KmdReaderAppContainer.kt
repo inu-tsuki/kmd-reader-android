@@ -3,6 +3,7 @@ package com.example.kmd_reader.data
 import android.content.Context
 import com.example.kmd_reader.data.bundle.BundleStore
 import com.example.kmd_reader.data.bundle.BundleStoreModule
+import com.example.kmd_reader.data.bundle.RevisionSourceStore
 import com.example.kmd_reader.data.local.KmdReaderDatabase
 import com.example.kmd_reader.data.remote.NetworkModule
 import com.example.kmd_reader.data.repository.FallbackWorkRepository
@@ -35,7 +36,8 @@ class KmdReaderAppContainer(context: Context) {
                 fallback = MockWorkRepository()
             ),
             localLibrary = localLibraryRepository,
-            bundleStore = bundleStore
+            bundleStore = bundleStore,
+            revisionSourceStore = revisionSourceStore
         )
     }
 
@@ -53,5 +55,9 @@ class KmdReaderAppContainer(context: Context) {
 
     val bundleStore: BundleStore by lazy {
         BundleStoreModule.create(appContext)
+    }
+
+    val revisionSourceStore: RevisionSourceStore by lazy {
+        RevisionSourceStore(appContext.filesDir)
     }
 }
