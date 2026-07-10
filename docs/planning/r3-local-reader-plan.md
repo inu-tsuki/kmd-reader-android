@@ -518,11 +518,15 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - ~~resolver 同时返回 entry、latestRevision、source 与 Work projection，保证 `Work.script.activeRevisionId` 和实际播放 source 来自同一个解析结果。~~ **已落地**：`LocalPlayable` 数据类包含 `entry` / `playableRevision` / `source`，resolver 一次解析供三个路径消费。
 - 真实提交入口出现后，再评估是否把 `LocalLibraryEntry.activeRevisionId/contentHash` 作为 denormalized 快照维护；该写入应由提交 use-case 统一处理，而不是分散在 Repository 调用方。
 
-### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）
-- MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null）
-- 卡片显示标题、进度、时间
-- 继续阅读入口
-- 书架页提供设置/关于入口（page-architecture 要求）
+### R3-F. 书架 UI（书架 + 阅读历史分离 + 设置入口）— 已落地（2026-07-09）
+- MineDesk 改造：书架（onShelf=true）+ 历史（lastReadAt!=null 且 onShelf=false）
+- 卡片显示标题、进度条（0%/<1% 隐藏）、时间（lastReadAt/importedAt 粗粒度天数格式化）
+- 继续阅读入口：卡片「继续阅读」按钮（progress>0 且 hasLocalSource）→ OpenWork + OpenReader 一步直达 Reader
+- 书架页提供设置/关于入口：`SettingsSheet` overlay（与 FilterOverlay 同构，不新增 Desk 条带）
+- **数据流**：`KmdReaderViewModel.refreshShelf()` 从 `localLibrary.getShelf()/getHistory()` 加载 → `ShelfItem`（纯 UI 模型，entry 直接组装，不 join Work）→ `KmdReaderState.shelfState`
+- **进度写库后刷新**（审查修复）：`persistProgressIfNeeded` 在 `updateProgress` 成功后调 `refreshShelf()`，确保同会话内阅读进度/历史即时刷新，不 stale 到下一次 refreshWorks/重启。`flushProgressOnCleared` 不刷新（VM 即将销毁，下次启动 init 会重新加载）。
+- **测试**：9 例（shelf/history 分组、排除无 shelf/history entry、shelf+history 分离、openSettings/closeSettings/isSettingsOpen 布尔切换、openSettings 关闭 search、ProgressChanged 后 history 即时出现、ProgressChanged 后已有 history 条目进度刷新）
+- **不做**（R3-F 边界）：加入书架按钮（R3-G）、详情页继续阅读按钮态（R3-H）、阅读偏好设置（R3-I）— SettingsSheet 只放关于/版本占位
 
 ### R3-G. 加入书架
 - 浏览/详情页「加入书架」

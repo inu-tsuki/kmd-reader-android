@@ -80,4 +80,12 @@ object DeskStackPolicy {
 
     fun setReviewMessage(state: DeskStackState, message: String): DeskStackState =
         state.copy(reviewMessage = message)
+
+    /** R3-F：打开设置/关于 overlay（与 search 同构，只切布尔，不改条带）。 */
+    fun openSettings(state: DeskStackState): DeskStackState =
+        state.copy(isSettingsOpen = true, isSearchOpen = false, isReviewOpen = false)
+
+    /** R3-F：关闭设置/关于 overlay。 */
+    fun closeSettings(state: DeskStackState): DeskStackState =
+        state.copy(isSettingsOpen = false)
 }

@@ -27,6 +27,9 @@ import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.ReaderRuntimeEvent
 import com.example.kmd_reader.runtime.ReaderRuntimeTimelineMarker
 import com.example.kmd_reader.runtime.toReaderRuntimeAssetManifest
+import com.example.kmd_reader.ui.screen.mine.ShelfItem
+import com.example.kmd_reader.ui.screen.mine.ShelfState
+import com.example.kmd_reader.ui.screen.mine.toShelfItem
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,6 +83,7 @@ class KmdReaderViewModel(
     init {
         observeRuntimeEvents()
         refreshWorks()
+        refreshShelf()
     }
 
     fun onAction(action: KmdReaderAction) {
@@ -719,6 +723,10 @@ class KmdReaderViewModel(
         viewModelScope.launch {
             runCatching {
                 localLibrary.updateProgress(workId, progress, timeMs, durationMs, now)
+            }.onSuccess {
+                // R3-F：进度写库后刷新 shelfState，否则书架/历史卡片在同会话内 stale。
+                // updateProgress 设置 lastReadAt → 该 work 进入历史列表；已有书架条目的进度/时间也同步。
+                refreshShelf()
             }
         }
     }
@@ -1067,6 +1075,8 @@ class KmdReaderViewModel(
                         errorMessage = null
                     )
                 }
+                // R3-F：作品列表刷新后同步刷新书架/历史（导入新作品后书架要立即体现）。
+                refreshShelf()
             }.onFailure { error ->
                 _state.update {
                     it.copy(
@@ -1076,6 +1086,21 @@ class KmdReaderViewModel(
                 }
                 sendEffect(KmdReaderEffect.ShowMessage("加载作品列表失败"))
             }
+        }
+    }
+
+    /**
+     * R3-F：从 local_library 加载书架（onShelf=true）+ 阅读历史（lastReadAt!=null 且 onShelf=false）。
+     * 纯用 [LocalLibraryEntry] 数据组装 [ShelfItem]，不 join [Work]——entry 自带 title/authorName/presentationMode。
+     * 在 init 和 refreshWorks 成功后调用，确保导入/阅读后书架即时刷新。
+     */
+    private fun refreshShelf() {
+        viewModelScope.launch {
+            val shelf = localLibrary.getShelf().map { it.toShelfItem() }
+            val history = localLibrary.getHistory()
+                .filter { !it.onShelf }
+                .map { it.toShelfItem() }
+            _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
         }
     }
 

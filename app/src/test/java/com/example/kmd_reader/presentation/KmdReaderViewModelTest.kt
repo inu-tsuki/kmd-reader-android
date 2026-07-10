@@ -11,8 +11,10 @@ import com.example.kmd_reader.data.repository.LocalRevision
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.IssueSeverity
 import com.example.kmd_reader.domain.model.KmdSourceRange
+import com.example.kmd_reader.domain.model.PresentationMode
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
+import com.example.kmd_reader.domain.model.WorkSourceType
 import com.example.kmd_reader.runtime.ReaderLoadRequest
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.ReaderRuntimeCapabilities
@@ -1285,6 +1287,248 @@ class KmdReaderViewModelTest {
             "OpenWork must flush pending draft before replacing issue focus",
             "second edit",
             issueDraftFromJson(localLibrary.getDraftsByType("glass-rail", LocalDraftTypes.ISSUE).first().payload).message
+        )
+    }
+
+    // ── R3-F 书架 UI ──
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun refreshShelfPopulatesShelfFromOnShelfEntries() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        localLibrary.upsertEntry(
+            shelfEntry("local-kmd-1", onShelf = true, importedAt = 1000L, lastReadAt = 2000L)
+        )
+        localLibrary.upsertEntry(
+            shelfEntry("local-kmd-2", onShelf = true, importedAt = 3000L, lastReadAt = null)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        val shelf = viewModel.state.value.shelfState.shelf
+        assertEquals(2, shelf.size)
+        // getShelf 按 COALESCE(lastReadAt, importedAt) DESC——local-kmd-1 有 lastReadAt=2000 > local-kmd-2 importedAt=3000?
+        // InMemory 排序: sortedByDescending { lastReadAt ?: importedAt ?: 0 }
+        // local-kmd-1: 2000, local-kmd-2: 3000 → local-kmd-2 先
+        assertEquals("local-kmd-2", shelf[0].workId)
+        assertEquals("local-kmd-1", shelf[1].workId)
+        assertTrue(shelf.all { it.onShelf })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun refreshShelfPopulatesHistoryFromLastReadAtEntries() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // onShelf=false 但有 lastReadAt → 历史
+        localLibrary.upsertEntry(
+            shelfEntry("remote-1", onShelf = false, importedAt = null, lastReadAt = 5000L)
+        )
+        localLibrary.upsertEntry(
+            shelfEntry("remote-2", onShelf = false, importedAt = null, lastReadAt = 3000L)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        val history = viewModel.state.value.shelfState.history
+        assertEquals(2, history.size)
+        // 按 lastReadAt DESC
+        assertEquals("remote-1", history[0].workId)
+        assertEquals("remote-2", history[1].workId)
+        assertTrue(history.all { !it.onShelf })
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun refreshShelfExcludesEntriesWithoutShelfOrHistory() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // onShelf=false + lastReadAt=null → 既不在书架也不在历史
+        localLibrary.upsertEntry(
+            shelfEntry("phantom", onShelf = false, importedAt = null, lastReadAt = null)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        val shelfState = viewModel.state.value.shelfState
+        assertTrue(shelfState.shelf.isEmpty())
+        assertTrue(shelfState.history.isEmpty())
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun refreshShelfSeparatesShelfAndHistoryWhenEntryIsOnBoth() = runTest {
+        val localLibrary = InMemoryLocalLibraryRepository()
+        // onShelf=true + lastReadAt!=null → 在书架里，但历史列表应排除 onShelf=true 的
+        localLibrary.upsertEntry(
+            shelfEntry("dual", onShelf = true, importedAt = 1000L, lastReadAt = 5000L)
+        )
+        // onShelf=false + lastReadAt!=null → 只在历史
+        localLibrary.upsertEntry(
+            shelfEntry("history-only", onShelf = false, importedAt = null, lastReadAt = 3000L)
+        )
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        val shelfState = viewModel.state.value.shelfState
+        // 书架只有 onShelf=true 的
+        assertEquals(1, shelfState.shelf.size)
+        assertEquals("dual", shelfState.shelf[0].workId)
+        // 历史只有 onShelf=false 且 lastReadAt!=null 的
+        assertEquals(1, shelfState.history.size)
+        assertEquals("history-only", shelfState.history[0].workId)
+    }
+
+    @Test
+    fun openSettingsSetsIsSettingsOpen() {
+        val viewModel = KmdReaderViewModel(FakeWorkRepository())
+
+        viewModel.onAction(KmdReaderAction.OpenSettings)
+
+        assertEquals(true, viewModel.state.value.deskStack.isSettingsOpen)
+    }
+
+    @Test
+    fun closeSettingsClearsIsSettingsOpen() {
+        val viewModel = KmdReaderViewModel(FakeWorkRepository())
+
+        viewModel.onAction(KmdReaderAction.OpenSettings)
+        assertEquals(true, viewModel.state.value.deskStack.isSettingsOpen)
+
+        viewModel.onAction(KmdReaderAction.CloseSettings)
+        assertEquals(false, viewModel.state.value.deskStack.isSettingsOpen)
+    }
+
+    @Test
+    fun openSettingsClosesSearchAndReview() {
+        val viewModel = KmdReaderViewModel(FakeWorkRepository())
+
+        viewModel.onAction(KmdReaderAction.OpenSearch)
+        assertEquals(true, viewModel.state.value.deskStack.isSearchOpen)
+
+        viewModel.onAction(KmdReaderAction.OpenSettings)
+        assertEquals(true, viewModel.state.value.deskStack.isSettingsOpen)
+        assertEquals(false, viewModel.state.value.deskStack.isSearchOpen)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun progressChangedUpdatesShelfStateWithoutVmRebuild() = runTest {
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        // 初始书架/历史都空（MockWorkRepository 的作品不在 local_library 里）。
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.shelfState.shelf.isEmpty())
+        assertTrue(viewModel.state.value.shelfState.history.isEmpty())
+
+        // 打开一个 mock 作品并阅读 → 首次阅读建 entry（onShelf=false, lastReadAt=null）。
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        // entry 已建但 lastReadAt 仍 null → 不在历史里。
+        assertTrue(
+            "entry exists but not yet in history (no lastReadAt)",
+            viewModel.state.value.shelfState.history.none { it.workId == "glass-rail" }
+        )
+
+        // 发出 ProgressChanged → updateProgress 写 lastReadAt → refreshShelf 刷新 shelfState。
+        clock = 1_000L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.3f, timeMs = 720, durationMs = 2400))
+        advanceUntilIdle()
+
+        // 同会话内、不重建 VM：glass-rail 应出现在历史列表。
+        val history = viewModel.state.value.shelfState.history
+        val historyItem = history.firstOrNull { it.workId == "glass-rail" }
+        assertNotNull("history must include glass-rail after progress persisted", historyItem)
+        assertEquals(false, historyItem!!.onShelf)
+        assertEquals(0.3f, historyItem.readingProgress, 0.001f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun progressChangedUpdatesExistingHistoryProgressWithoutVmRebuild() = runTest {
+        var clock = 0L
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val runtimeBridge = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            runtimeBridge = runtimeBridge,
+            nowMillis = { clock },
+            localLibrary = localLibrary
+        )
+
+        viewModel.onAction(KmdReaderAction.OpenWork("glass-rail"))
+        viewModel.onAction(KmdReaderAction.OpenReader)
+        advanceUntilIdle()
+        runtimeBridge.emit(ReaderRuntimeEvent.Ready(workId = "glass-rail", durationMs = 2400))
+        advanceUntilIdle()
+
+        // 第一笔进度 → history 出现 glass-rail，进度 0.3。
+        clock = 1_000L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.3f, timeMs = 720, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(0.3f, viewModel.state.value.shelfState.history.first { it.workId == "glass-rail" }.readingProgress, 0.001f)
+
+        // 第二笔进度（≥5s 后）→ 进度更新到 0.5 → shelfState 同步刷新，不重建 VM。
+        clock = 6_001L
+        runtimeBridge.emit(progressEvent("glass-rail", progress = 0.5f, timeMs = 1200, durationMs = 2400))
+        advanceUntilIdle()
+        assertEquals(
+            "shelfState must reflect updated progress without VM rebuild",
+            0.5f,
+            viewModel.state.value.shelfState.history.first { it.workId == "glass-rail" }.readingProgress,
+            0.001f
+        )
+    }
+
+    /** R3-F 测试 helper：构建可定制的 LocalLibraryEntry。 */
+    private fun shelfEntry(
+        workId: String,
+        onShelf: Boolean,
+        importedAt: Long?,
+        lastReadAt: Long?,
+        kmdSource: String? = null,
+        bundleId: String? = null
+    ): LocalLibraryEntry {
+        val work = MockWorks.works.firstOrNull { it.id == workId }
+        return LocalLibraryEntry(
+            workId = workId,
+            source = work?.sourceType ?: WorkSourceType.Local,
+            onShelf = onShelf,
+            title = work?.title ?: workId,
+            authorName = work?.authorName ?: "未知",
+            presentationMode = work?.presentation?.mode ?: PresentationMode.Scroll,
+            aspectRatio = work?.presentation?.aspectRatio ?: "16:9",
+            kmdSource = kmdSource,
+            contentUri = work?.contentUri ?: "",
+            readingProgress = if (lastReadAt != null) 0.5f else 0f,
+            readingTimeMs = null,
+            readingDurationMs = null,
+            lastReadAt = lastReadAt,
+            importedAt = importedAt,
+            cachedAt = null,
+            bundleId = bundleId
         )
     }
 

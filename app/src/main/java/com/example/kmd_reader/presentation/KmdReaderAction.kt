@@ -25,6 +25,10 @@ sealed interface KmdReaderAction {
     ) : KmdReaderAction
     data object CloseReaderCompanion : KmdReaderAction
     data object ToggleReaderCompanionExpanded : KmdReaderAction
+    /** R3-F：打开设置/关于 overlay（与 search overlay 同构，不新增 Desk 条带）。 */
+    data object OpenSettings : KmdReaderAction
+    /** R3-F：关闭设置/关于 overlay。 */
+    data object CloseSettings : KmdReaderAction
     data object OpenImport : KmdReaderAction
     /** R3-D3：SAF picker 选中文件后，携带 Uri 交给 VM 执行导入。 */
     data class ImportFromUri(val uri: android.net.Uri) : KmdReaderAction

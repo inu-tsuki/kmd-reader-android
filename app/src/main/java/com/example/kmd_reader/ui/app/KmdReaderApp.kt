@@ -38,6 +38,7 @@ import com.example.kmd_reader.ui.screen.browse.BrowseDesk
 import com.example.kmd_reader.ui.screen.browse.FilterOverlay
 import com.example.kmd_reader.ui.screen.importkmd.ImportDesk
 import com.example.kmd_reader.ui.screen.mine.MineDesk
+import com.example.kmd_reader.ui.screen.mine.SettingsSheet
 import com.example.kmd_reader.ui.screen.reader.ReaderDesk
 import com.example.kmd_reader.ui.screen.review.ReviewOverlay
 import com.example.kmd_reader.ui.screen.work.WorkDetailDesk
@@ -134,6 +135,10 @@ fun KmdReaderApp(
         dispatch(KmdReaderAction.CloseReaderCompanion)
     }
 
+    BackHandler(enabled = state.deskStack.isSettingsOpen) {
+        dispatch(KmdReaderAction.CloseSettings)
+    }
+
     Surface(
         modifier = modifier
             .fillMaxSize()
@@ -161,9 +166,14 @@ fun KmdReaderApp(
                 ) { page ->
                     when (desks[page]) {
                         Desk.Mine -> MineDesk(
-                            recentWorks = state.works,
+                            shelfState = state.shelfState,
                             onOpenImport = { dispatch(KmdReaderAction.OpenImport) },
-                            onOpenWork = { dispatch(KmdReaderAction.OpenWork(it)) }
+                            onOpenWork = { dispatch(KmdReaderAction.OpenWork(it)) },
+                            onContinueReading = { workId ->
+                                dispatch(KmdReaderAction.OpenWork(workId))
+                                dispatch(KmdReaderAction.OpenReader)
+                            },
+                            onOpenSettings = { dispatch(KmdReaderAction.OpenSettings) }
                         )
 
                         Desk.Browse -> BrowseDesk(
@@ -279,6 +289,12 @@ fun KmdReaderApp(
                     reviewMessage = state.deskStack.reviewMessage,
                     onDecision = { dispatch(KmdReaderAction.SetReviewMessage(it)) },
                     onClose = { dispatch(KmdReaderAction.CloseReview) }
+                )
+            }
+
+            if (state.deskStack.isSettingsOpen) {
+                SettingsSheet(
+                    onClose = { dispatch(KmdReaderAction.CloseSettings) }
                 )
             }
         }
