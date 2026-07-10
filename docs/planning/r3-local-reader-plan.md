@@ -565,7 +565,13 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - **P1 — no-op toggle 误发 effect**：未知 `workId` 无 entry 且不在 catalog 时是 no-op，但仍进入 `onSuccess` 提示"已移出书架"。修复：新增 `wroteSomething` 标志，只在真正写 DB 后才 `refreshShelfNow()` + `sendEffect`。
 - **P2 — 并发测试无法证明 mutex 必要**：原 `rapidToggleShelfTogglesExactlyTwice` 使用 `InMemoryLocalLibraryRepository`（方法不挂起），UnconfinedTestDispatcher 上两个 coroutine 自然顺序执行，即使移除 mutex 测试仍通过。修复：新增 `GatedGetEntryRepository`，前 `gateCount` 次 `getEntry` 挂起在 `CompletableDeferred` 上并返回创建时的**快照值**（不是释放后的实时值）。无 mutex：两次都读快照 false → 都写 true → 停在 true（测试失败）；有 mutex：第二次 getEntry 走 delegate 读实时 true → 写 false → false（测试通过）。**已验证**：临时注释 `shelfToggleMutex.withLock` 后此用例必须失败，恢复后通过。
 
-回归覆盖（KmdReaderViewModelTest 31 → 35 → 38 → 39）：
+#### 审查修复第三轮（PR #13 review）
+
+- **P1 — 跨生产者刷新仍能覆盖 toggle 的最终 UI 状态**：第二轮只锁了 toggle 内部的 getEntry-then-write-then-refresh，但 `init`/`refreshWorks`/`persistProgressIfNeeded` 仍通过 fire-and-forget `refreshShelf()` 启动独立刷新。一个仍成立的竞态序列：进度刷新读旧 shelf 后挂起 → toggle 写库+锁内刷新+回写正确状态 → 旧刷新恢复，把旧 shelf 覆盖回 `shelfState`。DB 正确但 UI stale。修复：引入 `shelfRefreshGeneration`（`AtomicInteger`）generation token。`refreshShelfNow()` 开始时捕获当前 generation，回写前校验：不匹配则丢弃（说明 toggle 已在期间递增并回写了更新状态）。`toggleShelf` 写完 DB 后 `incrementAndGet()` 再调 `refreshShelfNow()`——自己的刷新使用新 generation，不会被自己作废，但此前已启动的 fire-and-forget 刷新的迟到结果会被作废。
+- **Minor — `ToggleShelf` 注释漂移**：注释仍限定为「详情页 toggle」，但发现页 `WorkCard` 也使用。修复：更新为「发现页 WorkCard + 详情页 WorkDetailDesk toggle」。
+- **P2 — 跨生产者竞态测试**：新增 `GatedShelfRepository`，前 `gateCount` 次 `getShelf()` 挂起在 `CompletableDeferred` 上并返回创建时的**快照值**（不是释放后的实时值）。`getHistory()` 在 gate 未完成时同样返回快照。无 generation guard 时 stale refresh 回写旧 shelf 覆盖 toggle 结果（测试失败）；有 guard 时 generation 不匹配 → 丢弃（测试通过）。**已验证**：临时注释 generation guard 后此用例必须失败，恢复后通过。
+
+回归覆盖（KmdReaderViewModelTest 31 → 35 → 38 → 39 → 40）：
 - `toggleShelfAddsNeverReadWorkToShelf` — 无 entry → toggle → entry 创建，onShelf=true
 - `toggleShelfPutsExistingEntryOnShelf` — onShelf=false → toggle → onShelf=true，shelf 包含、history 排除
 - `toggleShelfRemovesFromShelf` — onShelf=true → toggle → onShelf=false，shelf 排除
@@ -574,6 +580,7 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - `toggleShelfFromBrowseDeskActionWorks` — BrowseDesk 的 ToggleShelf action 走同一路径
 - `toggleShelfNoOpWhenWorkNotInCatalog` — workId 不在 works 列表且无 entry → 不创建空 entry
 - `toggleShelfNoOpForUnknownWorkDoesNotEmitEffect` — no-op 路径不发送 ShowMessage effect
+- `staleShelfRefreshDoesNotOverwriteToggleResult` — `GatedShelfRepository` 制造跨生产者竞态，快照 getShelf 验证 generation guard 丢弃迟到结果
 
 ### R3-H. 详情页「继续阅读」按钮态
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）
