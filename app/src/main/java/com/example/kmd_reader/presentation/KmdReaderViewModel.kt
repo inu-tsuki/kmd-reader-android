@@ -1134,15 +1134,21 @@ class KmdReaderViewModel(
      * R3-F：从 local_library 加载书架（onShelf=true）+ 阅读历史（lastReadAt!=null 且 onShelf=false）。
      * 纯用 [LocalLibraryEntry] 数据组装 [ShelfItem]，不 join [Work]——entry 自带 title/authorName/presentationMode。
      * 在 init 和 refreshWorks 成功后调用，确保导入/阅读后书架即时刷新。
+     *
+     * R3-G-rev：拆出 suspend [refreshShelfNow]，让 mutex 内的 toggle 能 await 刷新完成，
+     * 防止两次 toggle 的锁外刷新竞态（第一次读旧 shelf 后挂起，第二次先回写最终状态，
+     * 第一次再把旧状态覆盖回来）。非 mutex 调用点用此 fire-and-forget 包装。
      */
     private fun refreshShelf() {
-        viewModelScope.launch {
-            val shelf = localLibrary.getShelf().map { it.toShelfItem() }
-            val history = localLibrary.getHistory()
-                .filter { !it.onShelf }
-                .map { it.toShelfItem() }
-            _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
-        }
+        viewModelScope.launch { refreshShelfNow() }
+    }
+
+    private suspend fun refreshShelfNow() {
+        val shelf = localLibrary.getShelf().map { it.toShelfItem() }
+        val history = localLibrary.getHistory()
+            .filter { !it.onShelf }
+            .map { it.toShelfItem() }
+        _state.update { it.copy(shelfState = ShelfState(shelf = shelf, history = history)) }
     }
 
     /**
@@ -1153,30 +1159,37 @@ class KmdReaderViewModel(
      *   镜像 `loadCurrentReaderWork` 的 get-then-insert 策略，不覆盖已有 progress/time 字段
      *   （无 entry 时本就没有可覆盖的）。
      * - `setOnShelf` 在 entry 不存在时静默 no-op，故无 entry 路径必须走 `upsertEntry` 而非 `setOnShelf`。
-     * - 成功后 `refreshShelf()` 刷新 UI（与 `persistProgressIfNeeded` 的模式一致），并发 ShowMessage。
-     * - `shelfToggleMutex` 串行化整个 getEntry-then-write 周期，防止快速连续点击的并发竞态
-     *   （两次并发 toggle 可能读到相同 onShelf 值，写入相同目标，导致双击只翻转一次）。
+     * - 成功后 `refreshShelfNow()` 在 mutex 内同步刷新 UI（不是 fire-and-forget），
+     *   防止两次 toggle 的锁外刷新竞态（第一次读旧 shelf 后挂起，第二次先回写最终状态，
+     *   第一次再把旧状态覆盖回来）。
+     * - `shelfToggleMutex` 串行化整个 getEntry-then-write-then-refresh 周期。
      *   使用单一 Mutex 而非 per-workId map：shelf toggle 是低频操作，全局串行化不构成瓶颈。
+     * - no-op 路径（workId 不在 works 且无 entry）不写 DB、不刷新、不提示。
      */
     private fun toggleShelf(workId: String) {
         viewModelScope.launch {
             shelfToggleMutex.withLock {
+                var wroteSomething = false
                 runCatching {
                     val existing = localLibrary.getEntry(workId)
                     if (existing != null) {
                         localLibrary.setOnShelf(workId, onShelf = !existing.onShelf)
+                        wroteSomething = true
                     } else {
                         val work = _state.value.works.firstOrNull { it.id == workId }
                         if (work != null) {
                             localLibrary.upsertEntry(work.toLocalLibraryEntry().copy(onShelf = true))
+                            wroteSomething = true
                         }
                     }
                 }.onSuccess {
-                    refreshShelf()
-                    val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
-                    sendEffect(
-                        KmdReaderEffect.ShowMessage(if (onShelf) "已加入书架" else "已移出书架")
-                    )
+                    if (wroteSomething) {
+                        refreshShelfNow()
+                        val onShelf = localLibrary.getEntry(workId)?.onShelf ?: false
+                        sendEffect(
+                            KmdReaderEffect.ShowMessage(if (onShelf) "已加入书架" else "已移出书架")
+                        )
+                    }
                 }.onFailure {
                     sendEffect(KmdReaderEffect.ShowMessage("书架操作失败"))
                 }

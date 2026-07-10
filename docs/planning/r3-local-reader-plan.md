@@ -559,14 +559,21 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - **P2 — 详情页三按钮窄屏溢出**：三个四字按钮放在不可换行 `Row` 中，360dp 屏幕接近溢出。修复：`WorkDetailDesk` 和 `WorkCard` 按钮区改为 `FlowRow`（`ExperimentalLayoutApi`，已在项目中使用），窄屏自动换行。
 - **文档漂移**：`docs/planning/README.md` 和 `docs/knowledge/architecture/page-architecture.md` 仍将 R3-G 标为后续事项。修复：更新为已落地。
 
-回归覆盖（KmdReaderViewModelTest 31 → 35 → 38）：
+#### 审查修复第二轮（PR #12 review）
+
+- **P1 — `refreshShelf()` 锁外刷新竞态**：第一轮的 `shelfToggleMutex` 只串行化了 getEntry-then-write，但 `onSuccess` 里调用的 `refreshShelf()` 另启 coroutine 调用立即返回。两次 toggle 产生两个锁外刷新：第一次读旧 shelf 后挂起，第二次先回写最终状态，随后第一次把旧状态覆盖回来。修复：拆出 `suspend refreshShelfNow()`，在 mutex 内同步完成查询+状态回写；非 mutex 调用点（`init`、`refreshWorks`、`persistProgressIfNeeded`）用 `refreshShelf()` 包装 `viewModelScope.launch { refreshShelfNow() }`。
+- **P1 — no-op toggle 误发 effect**：未知 `workId` 无 entry 且不在 catalog 时是 no-op，但仍进入 `onSuccess` 提示"已移出书架"。修复：新增 `wroteSomething` 标志，只在真正写 DB 后才 `refreshShelfNow()` + `sendEffect`。
+- **P2 — 并发测试无法证明 mutex 必要**：原 `rapidToggleShelfTogglesExactlyTwice` 使用 `InMemoryLocalLibraryRepository`（方法不挂起），UnconfinedTestDispatcher 上两个 coroutine 自然顺序执行，即使移除 mutex 测试仍通过。修复：新增 `GatedGetEntryRepository`，前 `gateCount` 次 `getEntry` 挂起在 `CompletableDeferred` 上并返回创建时的**快照值**（不是释放后的实时值）。无 mutex：两次都读快照 false → 都写 true → 停在 true（测试失败）；有 mutex：第二次 getEntry 走 delegate 读实时 true → 写 false → false（测试通过）。**已验证**：临时注释 `shelfToggleMutex.withLock` 后此用例必须失败，恢复后通过。
+
+回归覆盖（KmdReaderViewModelTest 31 → 35 → 38 → 39）：
 - `toggleShelfAddsNeverReadWorkToShelf` — 无 entry → toggle → entry 创建，onShelf=true
 - `toggleShelfPutsExistingEntryOnShelf` — onShelf=false → toggle → onShelf=true，shelf 包含、history 排除
 - `toggleShelfRemovesFromShelf` — onShelf=true → toggle → onShelf=false，shelf 排除
 - `toggleShelfCreatesEntryWithDefaultFieldsWhenNoneExists` — 无 entry → toggle → 新 entry 的 progress/time/importedAt 均为默认值
-- `rapidToggleShelfTogglesExactlyTwice` — 连续两次 toggle → onShelf 翻转两次（回到原值），验证 mutex 串行化
+- `rapidToggleShelfTogglesExactlyTwice` — `GatedGetEntryRepository` 制造真实竞态窗口，快照 getEntry 验证 mutex 串行化
 - `toggleShelfFromBrowseDeskActionWorks` — BrowseDesk 的 ToggleShelf action 走同一路径
 - `toggleShelfNoOpWhenWorkNotInCatalog` — workId 不在 works 列表且无 entry → 不创建空 entry
+- `toggleShelfNoOpForUnknownWorkDoesNotEmitEffect` — no-op 路径不发送 ShowMessage effect
 
 ### R3-H. 详情页「继续阅读」按钮态
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）

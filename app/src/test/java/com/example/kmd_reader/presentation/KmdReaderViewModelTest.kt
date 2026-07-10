@@ -29,6 +29,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -1757,10 +1759,27 @@ class KmdReaderViewModelTest {
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
     fun rapidToggleShelfTogglesExactlyTwice() = runTest {
-        val localLibrary = InMemoryLocalLibraryRepository()
-        // 预置 entry，onShelf=false。
-        localLibrary.upsertEntry(
+        // 用可控挂起的 repository 制造真实竞态窗口。
+        //
+        // 关键：gated getEntry 必须返回 gate 创建时的快照值，而不是释放后的实时值。
+        // 否则 UnconfinedTestDispatcher 会让两个协程顺序执行（A 完成后 B 才恢复），
+        // B 的 getEntry 读到 A 写入后的新值，即使无 mutex 也能正确翻转两次。
+        //
+        // gate 在创建时快照 onShelf=false，两次 getEntry 都返回此快照。
+        // 无 mutex：两次都读 false → 都写 true → 结果 true（只翻转一次，测试失败）。
+        // 有 mutex：第二次 getEntry 在第一次写完后才执行，此时 gate 已完成，
+        //   走 delegate.getEntry 读到 true → 写 false → 结果 false（翻转两次，测试通过）。
+        val delegate = InMemoryLocalLibraryRepository()
+        delegate.upsertEntry(
             shelfEntry("glass-rail", onShelf = false, importedAt = null, lastReadAt = null)
+        )
+        val snapshotEntry = delegate.getEntry("glass-rail")!! // 快照：onShelf=false
+        val getEntryGate = CompletableDeferred<Unit>()
+        val localLibrary = GatedGetEntryRepository(
+            delegate = delegate,
+            gate = getEntryGate,
+            gateCount = 2,
+            snapshot = snapshotEntry
         )
         val viewModel = KmdReaderViewModel(
             repository = FakeWorkRepository(),
@@ -1768,17 +1787,20 @@ class KmdReaderViewModelTest {
         )
         advanceUntilIdle()
 
-        // 连续两次 toggle：false → true → false。mutex 串行化后应翻转两次。
+        // 连续两次 toggle。
         viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
         viewModel.onAction(KmdReaderAction.ToggleShelf("glass-rail"))
         advanceUntilIdle()
 
-        // 两次翻转后应回到初始值 false。无 mutex 时并发竞态可能导致两次都读到 false
-        // 并都写入 true，最终只翻转一次（停在 true）。
+        // 释放 gate——两个挂起的 getEntry 同时返回快照（onShelf=false）。
+        getEntryGate.complete(Unit)
+        advanceUntilIdle()
+
+        // 有 mutex：翻转两次回到 false。无 mutex：两次都读快照 false → 都写 true → 停在 true。
         assertEquals(
-            "rapid double toggle must net to original value (mutex serializes)",
+            "rapid double toggle must net to original value (mutex serializes reads+writes)",
             false,
-            localLibrary.getEntry("glass-rail")?.onShelf
+            delegate.getEntry("glass-rail")?.onShelf
         )
     }
 
@@ -1817,6 +1839,35 @@ class KmdReaderViewModelTest {
         advanceUntilIdle()
 
         assertNull(localLibrary.getEntry("nonexistent-work"))
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun toggleShelfNoOpForUnknownWorkDoesNotEmitEffect() = runTest {
+        // 审查 Minor：未知 workId 无 entry 且不在 catalog → no-op，
+        // 不应进入 onSuccess 提示"已移出书架"。
+        val localLibrary = InMemoryLocalLibraryRepository()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(),
+            localLibrary = localLibrary
+        )
+        advanceUntilIdle()
+
+        // 先启动 effect 收集器（Channel BUFFERED，但收集必须在 produce 之前启动
+        // 以避免 race——launch 后 advanceUntilIdle 让 collector 就位）。
+        val effects = mutableListOf<KmdReaderEffect>()
+        val job = launch { viewModel.effectFlow.toList(effects) }
+        advanceUntilIdle() // collector 就位
+
+        viewModel.onAction(KmdReaderAction.ToggleShelf("nonexistent-work"))
+        advanceUntilIdle()
+
+        job.cancel()
+
+        assertTrue(
+            "no-op toggle should not emit any effect",
+            effects.none { it is KmdReaderEffect.ShowMessage }
+        )
     }
 
     /** R3-F 测试 helper：构建可定制的 LocalLibraryEntry。 */
@@ -1975,6 +2026,62 @@ private class ControllableLocalLibraryRepository(
     override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
     override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
     override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
+    override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
+}
+
+/**
+ * R3-G-rev：前 [gateCount] 次 `getEntry` 调用挂起在 [gate] 上，释放后返回 [snapshot]
+ * （创建时的快照值，不是释放后的实时值）。之后的调用委派给 [delegate]。
+ *
+ * 用于制造真实的并发竞态窗口：UnconfinedTestDispatcher 单线程无抢占，如果 gate 释放后
+ * 仍读 delegate 实时值，两个协程会顺序执行（A 完成后 B 才恢复），B 读到 A 写入后的新值，
+ * 即使无 mutex 也能正确翻转两次——测试无法证明 mutex 必要。
+ *
+ * 返回快照后：无 mutex 两次都读快照 false → 都写 true → 停在 true（测试失败）；
+ * 有 mutex 时第二次 getEntry 走 delegate（gate 已完成）读实时 true → 写 false → false（测试通过）。
+ *
+ * 注意：不能用 Mutex/synchronized 包裹 gate.await()——挂起时持锁会让后续 getEntry
+ * 一并阻塞。UnconfinedTestDispatcher 单线程且无抢占，普通计数器即可安全区分。
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+private class GatedGetEntryRepository(
+    private val delegate: LocalLibraryRepository,
+    private val gate: CompletableDeferred<Unit>,
+    private val gateCount: Int,
+    private val snapshot: LocalLibraryEntry
+) : LocalLibraryRepository {
+    private var gatedCallsRemaining = gateCount
+
+    override suspend fun getEntry(workId: String): LocalLibraryEntry? {
+        if (gatedCallsRemaining > 0) {
+            gatedCallsRemaining--
+            gate.await()
+            return snapshot
+        }
+        return delegate.getEntry(workId)
+    }
+
+    override suspend fun getShelf(): List<LocalLibraryEntry> = delegate.getShelf()
+    override suspend fun getHistory(): List<LocalLibraryEntry> = delegate.getHistory()
+    override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
+    override suspend fun updateProgress(
+        workId: String, progress: Float, timeMs: Long?, durationMs: Long?, now: Long, revisionId: String?
+    ) = delegate.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
+    override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
+        delegate.setOnShelf(workId, onShelf)
+    override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        delegate.getLatestRevision(workId)
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        delegate.findRevisionByContentHash(workId, contentHash)
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        delegate.getRevisionsForWork(workId)
+    override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
+    override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
+    override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun getDraftsByType(workId: String, type: String): List<LocalDraft> =
+        delegate.getDraftsByType(workId, type)
     override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
     override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
 }
