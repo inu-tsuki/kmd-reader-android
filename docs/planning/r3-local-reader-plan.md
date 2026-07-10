@@ -571,6 +571,12 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 - **Minor — `ToggleShelf` 注释漂移**：注释仍限定为「详情页 toggle」，但发现页 `WorkCard` 也使用。修复：更新为「发现页 WorkCard + 详情页 WorkDetailDesk toggle」。
 - **P2 — 跨生产者竞态测试**：新增 `GatedShelfRepository`，前 `gateCount` 次 `getShelf()` 挂起在 `CompletableDeferred` 上并返回创建时的**快照值**（不是释放后的实时值）。`getHistory()` 在 gate 未完成时同样返回快照。无 generation guard 时 stale refresh 回写旧 shelf 覆盖 toggle 结果（测试失败）；有 guard 时 generation 不匹配 → 丢弃（测试通过）。**已验证**：临时注释 generation guard 后此用例必须失败，恢复后通过。
 
+#### 审查修复第四轮
+
+- **P1 — shelf 与 progress 持久化写竞争**：`RoomLocalLibraryRepository.setOnShelf()` 和 `updateProgress()` 原先都执行 `getByWorkId -> copy -> upsert`。两条 coroutine 交错时，任一方都可能用旧 entity 覆盖另一方刚写入的 `onShelf`、阅读进度或 `lastReadAt`。修复：在 `LocalLibraryDao` 增加字段级原子 `UPDATE`；shelf 路径只写 `onShelf`，progress 路径只写 progress/time/duration/revision/lastReadAt。
+- **null 与缺行契约**：`readingTimeMs` 直接赋值，允许 null 清除；`readingDurationMs` 和 `activeRevisionId` 用 `COALESCE` 保持“事件未携带时不覆盖”的既有语义。DAO 返回 affected-row count；Repository 保持既有接口语义，0 行表示缺少 entry，静默 no-op，entry 的创建仍由调用方显式负责。
+- **Room 回归**：真实内存 Room DB 用 SQLite TEMP `UPDATE OF` trigger 检查 SQL 的 SET 列集合：shelf 写入一旦触及 progress/time/duration/revision/lastReadAt 即中止，progress 写入一旦触及 `onShelf` 即中止。该机制使旧 read-copy-upsert 即便写回相同值也确定失败，字段级 UPDATE 通过；同时覆盖 nullable 字段和缺行 affected-row count。
+
 回归覆盖（KmdReaderViewModelTest 31 → 35 → 38 → 39 → 40）：
 - `toggleShelfAddsNeverReadWorkToShelf` — 无 entry → toggle → entry 创建，onShelf=true
 - `toggleShelfPutsExistingEntryOnShelf` — onShelf=false → toggle → onShelf=true，shelf 包含、history 排除

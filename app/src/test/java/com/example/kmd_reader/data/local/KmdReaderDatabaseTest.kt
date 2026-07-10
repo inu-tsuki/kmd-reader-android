@@ -341,4 +341,102 @@ class KmdReaderDatabaseTest {
         )
         assertEquals(0.6f, after2.readingProgress, 0.001f)
     }
+
+    // ── R3-G-rev3：字段级原子 UPDATE，setOnShelf 和 updateProgress 不互相覆盖 ──
+
+    @Test
+    fun roomSetOnShelfUpdatesOnlyShelfColumn() = runTest {
+        val repo = RoomLocalLibraryRepository(libraryDao, revisionDao, draftDao)
+        libraryDao.upsert(libraryEntry("rain-city", onShelf = false, progress = 0f))
+
+        repo.updateProgress("rain-city", 0.5f, null, 2400, 1000, null)
+        database.openHelper.writableDatabase.execSQL("""
+            CREATE TEMP TRIGGER reject_shelf_progress_columns
+            BEFORE UPDATE OF readingProgress, readingTimeMs, readingDurationMs, activeRevisionId, lastReadAt
+            ON local_library
+            BEGIN
+                SELECT RAISE(ABORT, 'setOnShelf touched a progress column');
+            END
+        """.trimIndent())
+
+        // UPDATE OF checks the SQL SET-column set, even when a value is unchanged.
+        // A stale entity copy + upsert therefore trips the trigger; the field-level UPDATE passes.
+        repo.setOnShelf("rain-city", true)
+
+        val saved = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        assertEquals("setOnShelf must not overwrite progress (atomic field UPDATE)", 0.5f, saved.readingProgress, 0.001f)
+        assertNull("readingTimeMs=null is an explicit value and must be persisted", saved.readingTimeMs)
+        assertEquals(1000L, saved.lastReadAt)
+        assertEquals(true, saved.onShelf)
+    }
+
+    @Test
+    fun roomUpdateProgressDoesNotTouchShelfColumn() = runTest {
+        val repo = RoomLocalLibraryRepository(libraryDao, revisionDao, draftDao)
+        libraryDao.upsert(libraryEntry("rain-city", onShelf = false, progress = 0f))
+
+        repo.setOnShelf("rain-city", true)
+        database.openHelper.writableDatabase.execSQL("""
+            CREATE TEMP TRIGGER reject_progress_shelf_column
+            BEFORE UPDATE OF onShelf
+            ON local_library
+            BEGIN
+                SELECT RAISE(ABORT, 'updateProgress touched onShelf');
+            END
+        """.trimIndent())
+
+        // The old entity-copy upsert includes onShelf in its SET list and must fail here.
+        repo.updateProgress("rain-city", 0.5f, 1200, 2400, 1000, null)
+
+        val saved = requireNotNull(libraryDao.getByWorkId("rain-city"))
+        assertEquals("updateProgress must not overwrite onShelf (atomic field UPDATE)", true, saved.onShelf)
+        assertEquals(0.5f, saved.readingProgress, 0.001f)
+    }
+
+    @Test
+    fun fieldIsolationTriggerRejectsWholeEntityUpsert() = runTest {
+        val existing = libraryEntry("rain-city", onShelf = false, progress = 0f)
+        libraryDao.upsert(existing)
+        database.openHelper.writableDatabase.execSQL("""
+            CREATE TEMP TRIGGER reject_whole_entity_progress_columns
+            BEFORE UPDATE OF readingProgress, readingTimeMs, readingDurationMs, activeRevisionId, lastReadAt
+            ON local_library
+            BEGIN
+                SELECT RAISE(ABORT, 'whole-entity update touched a progress column');
+            END
+        """.trimIndent())
+
+        // Calibrates the UPDATE OF probe against the retired implementation shape.
+        val failure = runCatching {
+            libraryDao.upsert(existing.copy(onShelf = true))
+        }.exceptionOrNull()
+        assertNotNull("whole-entity copy + upsert must trip the field-isolation trigger", failure)
+    }
+
+    // R3-G-rev3 DAO 层：updateProgress 和 setOnShelf 的 affected-row count
+    @Test
+    fun daoUpdateProgressReturnsAffectedRowCount() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city"))
+        val rows = libraryDao.updateProgress("rain-city", 0.5f, 1000, 2000, 500, null)
+        assertEquals("updateProgress should return 1 for existing row", 1, rows)
+    }
+
+    @Test
+    fun daoUpdateProgressReturnsZeroForMissingRow() = runTest {
+        val rows = libraryDao.updateProgress("nonexistent", 0.5f, 1000, 2000, 500, null)
+        assertEquals("updateProgress should return 0 for missing row", 0, rows)
+    }
+
+    @Test
+    fun daoSetOnShelfReturnsAffectedRowCount() = runTest {
+        libraryDao.upsert(libraryEntry("rain-city", onShelf = false))
+        val rows = libraryDao.setOnShelf("rain-city", true)
+        assertEquals("setOnShelf should return 1 for existing row", 1, rows)
+    }
+
+    @Test
+    fun daoSetOnShelfReturnsZeroForMissingRow() = runTest {
+        val rows = libraryDao.setOnShelf("nonexistent", true)
+        assertEquals("setOnShelf should return 0 for missing row", 0, rows)
+    }
 }
