@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.example.kmd_reader.ui.component.InfoCard
 import com.example.kmd_reader.ui.component.KmdPill
 import com.example.kmd_reader.ui.component.SectionTitle
-import java.util.concurrent.TimeUnit
+import com.example.kmd_reader.ui.format.formatRelativeReadTime
 
 /**
  * R3-F：书架桌面（page-architecture §7.1）。
@@ -190,20 +190,10 @@ private fun ShelfCard(
 private fun formatTimeLabel(item: ShelfItem): String? {
     val now = System.currentTimeMillis()
     item.lastReadAt?.let { last ->
-        return "上次阅读 ${formatDaysAgo(now, last)}"
+        return "上次阅读 ${formatRelativeReadTime(now, last)}"
     }
     item.importedAt?.let { imported ->
-        return "导入于 ${formatDaysAgo(now, imported)}"
+        return "导入于 ${formatRelativeReadTime(now, imported)}"
     }
     return null
-}
-
-private fun formatDaysAgo(now: Long, past: Long): String {
-    val days = TimeUnit.MILLISECONDS.toDays(now - past)
-    return when {
-        days <= 0L -> "今天"
-        days == 1L -> "1 天前"
-        days < 30L -> "$days 天前"
-        else -> "${days / 30} 个月前"
-    }
 }

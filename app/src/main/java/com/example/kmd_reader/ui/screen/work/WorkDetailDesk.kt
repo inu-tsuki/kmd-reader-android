@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,6 +28,7 @@ import com.example.kmd_reader.ui.component.WorkMetaChips
 fun WorkDetailDesk(
     work: Work?,
     onShelf: Boolean,
+    readingState: WorkDetailReadingState,
     onOpenReader: () -> Unit,
     onOpenReview: () -> Unit,
     onOpenImport: () -> Unit,
@@ -65,10 +67,17 @@ fun WorkDetailDesk(
             StatRow("复杂度", work.attributes.complexityLevel.label)
             StatRow("Runtime", work.attributes.runtimeVersion)
         }
+        readingState.summary?.let { summary ->
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         // FlowRow：窄屏/大字体下自动换行，避免三个按钮横向溢出。
         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = onOpenReader) {
-                Text("开始阅读")
+                Text(readingState.buttonLabel)
             }
             OutlinedButton(onClick = onOpenReview) {
                 Text("审阅脚本")

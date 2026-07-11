@@ -17,6 +17,8 @@ data class ShelfItem(
     val readingProgress: Float,
     val lastReadAt: Long?,
     val importedAt: Long?,
+    /** The revision that was active when the persisted reading state was last written. */
+    val activeRevisionId: String?,
     val onShelf: Boolean,
     val hasLocalSource: Boolean
 )
@@ -28,7 +30,15 @@ data class ShelfItem(
 data class ShelfState(
     val shelf: List<ShelfItem> = emptyList(),
     val history: List<ShelfItem> = emptyList()
-)
+) {
+    /**
+     * Shelf and history are mutually exclusive presentation groups. Detail state must search
+     * both because an on-shelf work with reading progress remains in [shelf], not [history].
+     */
+    fun findByWorkId(workId: String?): ShelfItem? = workId?.let { id ->
+        shelf.firstOrNull { it.workId == id } ?: history.firstOrNull { it.workId == id }
+    }
+}
 
 /**
  * 从 [LocalLibraryEntry] 组装 [ShelfItem]。hasLocalSource 判据与 LocalAwareWorkRepository.isLocalEntry 一致。
@@ -41,6 +51,7 @@ fun LocalLibraryEntry.toShelfItem(): ShelfItem = ShelfItem(
     readingProgress = readingProgress,
     lastReadAt = lastReadAt,
     importedAt = importedAt,
+    activeRevisionId = activeRevisionId,
     onShelf = onShelf,
     hasLocalSource = kmdSource != null || bundleId != null
 )
