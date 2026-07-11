@@ -1,7 +1,7 @@
 # R3：完善的本地阅读器 —— 实施规划
 
 > 文档状态：规划草案
-> 最近更新：2026-07-10（R3-F 已落地；R3-I 确认为下一 UI 优化切片）
+> 最近更新：2026-07-11（R3-G/R3-H 已落地；R3-I 是下一 UI 优化切片）
 > 代号：R3
 > 权威范围：本地数据模型、书架、导入、阅读进度持久化、设置、完整离线阅读体验
 
@@ -591,6 +591,8 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 ### R3-H. 详情页「继续阅读」按钮态
 - 详情页阅读按钮根据阅读历史显示「开始阅读」或「继续阅读」（PRD 5.3/7.1）
 - 有进度时显示上次阅读位置摘要
+
+已落地。实施决策与完整回归矩阵见 [`r3-h-work-detail-continuation-plan.md`](r3-h-work-detail-continuation-plan.md)。详情页只从 `shelfState` 的跨分组 lookup 获取本地状态；`ShelfItem` 投影保存时 revision，纯 resolver 与 `restoreSeekOnReady()` 共享“任一 revision 为空则兼容”的规则。中段且可恢复时才显示「继续阅读」及百分比/上次阅读摘要；完成或版本不兼容均显示「开始阅读」。本切片继续复用 `OpenReader` + Ready 后恢复链路，不新增 action 或 seek 路径。JVM 回归覆盖进度/revision/null 时间、时间边界、shelf/history lookup 和切换作品状态。
 
 ### R3-I. 设置页（阅读偏好）— 下一 UI 优化
 

@@ -42,6 +42,7 @@ import com.example.kmd_reader.ui.screen.mine.SettingsSheet
 import com.example.kmd_reader.ui.screen.reader.ReaderDesk
 import com.example.kmd_reader.ui.screen.review.ReviewOverlay
 import com.example.kmd_reader.ui.screen.work.WorkDetailDesk
+import com.example.kmd_reader.ui.screen.work.resolveWorkDetailReadingState
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -190,6 +191,11 @@ fun KmdReaderApp(
                             onShelf = state.shelfState.shelf.any {
                                 it.workId == state.deskStack.currentWorkId
                             },
+                            readingState = resolveWorkDetailReadingState(
+                                item = state.shelfState.findByWorkId(state.deskStack.currentWorkId),
+                                currentRevisionId = state.selectedWork?.script?.activeRevisionId,
+                                now = System.currentTimeMillis()
+                            ),
                             onOpenReader = { dispatch(KmdReaderAction.OpenReader) },
                             onOpenReview = { dispatch(KmdReaderAction.OpenReview) },
                             onOpenImport = { dispatch(KmdReaderAction.OpenImport) },

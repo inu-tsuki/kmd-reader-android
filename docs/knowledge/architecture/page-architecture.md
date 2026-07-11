@@ -214,7 +214,8 @@ flowchart LR
 - ✅ 继续阅读入口（卡片「继续阅读」按钮 → OpenWork + OpenReader 一步直达 Reader）。
 - ✅ 设置和项目说明入口（`SettingsSheet` overlay，与 search overlay 同构，不新增 Desk 条带）。
 - ✅ 加入书架按钮（发现页 `WorkCard` + 详情页 `WorkDetailDesk` toggle）。
-- 待后续（R3-H/I）：详情页继续阅读按钮态、阅读偏好设置。
+- ✅ 详情页续读状态（R3-H）：只消费 `shelfState`，以与 Ready 后恢复一致的 revision 规则展示“继续阅读”或“开始阅读”。
+- 待后续（R3-I）：阅读偏好设置。
 
 ### 7.2 发现桌面
 
