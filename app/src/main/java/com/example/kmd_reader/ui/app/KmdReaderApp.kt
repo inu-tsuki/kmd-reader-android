@@ -223,6 +223,7 @@ fun KmdReaderApp(
                             runtimeBridge = runtimeBridge,
                             onBackToDetail = { dispatch(KmdReaderAction.CloseCurrentDesk) },
                             onOpenReview = { dispatch(KmdReaderAction.OpenReview) },
+                            onOpenSettings = { dispatch(KmdReaderAction.OpenSettings) },
                             onOpenIssues = {
                                 dispatch(KmdReaderAction.OpenReaderCompanion(ReaderCompanionType.Issues))
                             },
@@ -310,6 +311,12 @@ fun KmdReaderApp(
 
             if (state.deskStack.isSettingsOpen) {
                 SettingsSheet(
+                    preferences = state.readerPreferences,
+                    onFontScalePreview = { dispatch(KmdReaderAction.PreviewReaderFontScale(it)) },
+                    onFontScaleCommit = { dispatch(KmdReaderAction.SetReaderFontScale(it)) },
+                    onThemeModeChange = { dispatch(KmdReaderAction.SetThemeMode(it)) },
+                    onAutoSaveProgressChange = { dispatch(KmdReaderAction.SetAutoSaveProgress(it)) },
+                    onReducedMotionChange = { dispatch(KmdReaderAction.SetReducedMotion(it)) },
                     onClose = { dispatch(KmdReaderAction.CloseSettings) }
                 )
             }

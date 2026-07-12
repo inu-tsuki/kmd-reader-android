@@ -11,9 +11,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -21,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import com.example.kmd_reader.ui.component.InfoCard
 import com.example.kmd_reader.ui.component.SectionTitle
 import com.example.kmd_reader.ui.component.StatRow
+import com.example.kmd_reader.data.preferences.ReaderPreferences
+import com.example.kmd_reader.data.preferences.ThemeMode
 
 /**
  * R3-F：设置/关于 overlay（page-architecture §7.1 要求书架页提供设置/关于入口）。
@@ -30,9 +39,16 @@ import com.example.kmd_reader.ui.component.StatRow
  */
 @Composable
 fun SettingsSheet(
+    preferences: ReaderPreferences,
+    onFontScalePreview: (Float) -> Unit,
+    onFontScaleCommit: (Float) -> Unit,
+    onThemeModeChange: (ThemeMode) -> Unit,
+    onAutoSaveProgressChange: (Boolean) -> Unit,
+    onReducedMotionChange: (Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val sliderValue = remember(preferences.fontScale) { mutableFloatStateOf(preferences.fontScale) }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -51,14 +67,37 @@ fun SettingsSheet(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                SectionTitle("设置 / 关于", "项目信息和阅读偏好。")
+                SectionTitle("阅读设置", "")
+                Text("主题")
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    ThemeMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = preferences.themeMode == mode,
+                            onClick = { onThemeModeChange(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size)
+                        ) { Text(if (mode == ThemeMode.System) "跟随系统" else if (mode == ThemeMode.Light) "明亮" else "暗色") }
+                    }
+                }
+                Text("字号 ${(preferences.fontScale * 100).toInt()}%")
+                Slider(
+                    value = sliderValue.floatValue,
+                    onValueChange = {
+                        sliderValue.floatValue = (it * 20).toInt() / 20f
+                        onFontScalePreview(sliderValue.floatValue)
+                    },
+                    onValueChangeFinished = { onFontScaleCommit(sliderValue.floatValue) },
+                    valueRange = ReaderPreferences.MIN_FONT_SCALE..ReaderPreferences.MAX_FONT_SCALE,
+                    steps = 8
+                )
+                settingSwitch("自动保存阅读进度", preferences.autoSaveProgress, onAutoSaveProgressChange)
+                settingSwitch("减少动态效果", preferences.reducedMotion, onReducedMotionChange)
+                SectionTitle("关于", "")
                 InfoCard(
                     title = "KMD Reader",
                     body = "KMD 作品阅读器 —— 活动桌面式导航，本地导入与社区发现。"
                 )
-                StatRow(label = "版本", value = "R3-F (开发中)")
+                StatRow(label = "版本", value = "R3-I (开发中)")
                 StatRow(label = "KMD Runtime", value = "WebView Host")
-                StatRow(label = "阅读偏好", value = "待 R3-I 接入")
                 OutlinedButton(
                     onClick = onClose,
                     modifier = Modifier.fillMaxWidth()
@@ -67,5 +106,17 @@ fun SettingsSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun settingSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

@@ -9,6 +9,10 @@ import com.example.kmd_reader.data.KmdReaderAppContainer
 import com.example.kmd_reader.presentation.KmdReaderViewModel
 import com.example.kmd_reader.ui.app.KmdReaderApp
 import com.example.kmd_reader.ui.theme.KmdreaderTheme
+import com.example.kmd_reader.data.preferences.ThemeMode
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.isSystemInDarkTheme
 
 class MainActivity : ComponentActivity() {
     private val appContainer by lazy {
@@ -21,7 +25,8 @@ class MainActivity : ComponentActivity() {
             runtimeBridge = appContainer.readerRuntimeBridge,
             localLibrary = appContainer.localLibraryRepository,
             bundleStore = appContainer.bundleStore,
-            appContext = applicationContext
+            appContext = applicationContext,
+            preferencesRepository = appContainer.readerPreferencesRepository
         )
     }
 
@@ -29,7 +34,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            KmdreaderTheme {
+            val state by readerViewModel.state.collectAsState()
+            val darkTheme = when (state.readerPreferences.themeMode) {
+                ThemeMode.System -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            KmdreaderTheme(darkTheme = darkTheme) {
                 KmdReaderApp(
                     viewModel = readerViewModel,
                     runtimeBridge = readerViewModel.runtimeBridgeForHost

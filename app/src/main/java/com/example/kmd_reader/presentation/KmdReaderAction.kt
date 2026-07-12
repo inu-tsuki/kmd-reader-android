@@ -1,6 +1,7 @@
 package com.example.kmd_reader.presentation
 
 import com.example.kmd_reader.domain.model.PresentationMode
+import com.example.kmd_reader.data.preferences.ThemeMode
 
 sealed interface KmdReaderAction {
     data object RefreshWorks : KmdReaderAction
@@ -29,6 +30,11 @@ sealed interface KmdReaderAction {
     data object OpenSettings : KmdReaderAction
     /** R3-F：关闭设置/关于 overlay。 */
     data object CloseSettings : KmdReaderAction
+    data class SetReaderFontScale(val fontScale: Float) : KmdReaderAction
+    data class PreviewReaderFontScale(val fontScale: Float) : KmdReaderAction
+    data class SetThemeMode(val themeMode: ThemeMode) : KmdReaderAction
+    data class SetAutoSaveProgress(val enabled: Boolean) : KmdReaderAction
+    data class SetReducedMotion(val enabled: Boolean) : KmdReaderAction
     /** R3-G：加入/移出书架（发现页 WorkCard + 详情页 WorkDetailDesk toggle）。 */
     data class ToggleShelf(val workId: String) : KmdReaderAction
     data object OpenImport : KmdReaderAction

@@ -5,6 +5,7 @@ import com.example.kmd_reader.domain.model.KmdSourceSnapshot
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 import com.example.kmd_reader.ui.screen.mine.ShelfState
+import com.example.kmd_reader.data.preferences.ReaderPreferences
 
 data class KmdReaderState(
     val deskStack: DeskStackState = DeskStackState(),
@@ -23,7 +24,8 @@ data class KmdReaderState(
     val errorMessage: String? = null,
     val importState: ImportState = ImportState.Idle,
     /** R3-F：书架 + 阅读历史分组。由 VM.refreshShelf() 从 local_library 加载。 */
-    val shelfState: ShelfState = ShelfState()
+    val shelfState: ShelfState = ShelfState(),
+    val readerPreferences: ReaderPreferences = ReaderPreferences()
 ) {
     val selectedWork: Work?
         get() = works.firstOrNull { it.id == deskStack.currentWorkId }

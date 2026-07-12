@@ -8,6 +8,7 @@ import com.example.kmd_reader.data.repository.LocalDraftTypes
 import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.data.repository.LocalRevision
+import com.example.kmd_reader.data.preferences.InMemoryReaderPreferencesRepository
 import com.example.kmd_reader.data.mock.MockWorks
 import com.example.kmd_reader.domain.model.IssueSeverity
 import com.example.kmd_reader.domain.model.KmdSourceRange
@@ -564,6 +565,123 @@ class KmdReaderViewModelTest {
             0.001f
         )
         assertEquals(2_000L, entry?.lastReadAt)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun autoSaveDisableFlushesThenBlocksWritesUntilReenabled() = runTest {
+        var clock = 0L
+        val library = InMemoryLocalLibraryRepository()
+        val runtime = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(), runtimeBridge = runtime, localLibrary = library,
+            nowMillis = { clock }, preferencesRepository = InMemoryReaderPreferencesRepository()
+        )
+        bringReaderToReady(viewModel, runtime, "glass-rail")
+        runtime.emit(progressEvent("glass-rail", 0.1f, 240, 2400))
+        advanceUntilIdle()
+        clock = 1_000L
+        runtime.emit(progressEvent("glass-rail", 0.8f, 1920, 2400))
+        advanceUntilIdle()
+
+        viewModel.onAction(KmdReaderAction.SetAutoSaveProgress(false))
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.readerPreferences.autoSaveProgress)
+        assertEquals(0.8f, library.getEntry("glass-rail")!!.readingProgress, 0f)
+
+        clock = 2_000L
+        runtime.emit(progressEvent("glass-rail", 0.95f, 2280, 2400))
+        advanceUntilIdle()
+        viewModel.flushProgressOnCleared()
+        assertEquals(0.8f, library.getEntry("glass-rail")!!.readingProgress, 0f)
+
+        viewModel.onAction(KmdReaderAction.SetAutoSaveProgress(true))
+        advanceUntilIdle()
+        runtime.emit(progressEvent("glass-rail", 0.95f, 2280, 2400))
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.readerPreferences.autoSaveProgress)
+        assertEquals(0.95f, library.getEntry("glass-rail")!!.readingProgress, 0f)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun autoSaveDisableWaitsForInFlightWriteThenPreventsLateWrites() = runTest {
+        // 第一笔写在 progressPersistenceMutex 内挂起。关闭请求和新的进度事件均在它完成前到达，
+        // 用以覆盖真实 Room 写较慢时最容易出现的交错。
+        var clock = 0L
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        val library = ProgressWriteTestRepository(
+            delegate = InMemoryLocalLibraryRepository(),
+            firstWriteStarted = firstWriteStarted,
+            releaseFirstWrite = releaseFirstWrite
+        )
+        val runtime = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(), runtimeBridge = runtime, localLibrary = library,
+            nowMillis = { clock }, preferencesRepository = InMemoryReaderPreferencesRepository()
+        )
+        bringReaderToReady(viewModel, runtime, "glass-rail")
+
+        runtime.emit(progressEvent("glass-rail", 0.2f, 480, 2400))
+        firstWriteStarted.await()
+
+        viewModel.onAction(KmdReaderAction.SetAutoSaveProgress(false))
+        // 关闭正在等待 mutex；这次事件会更新内存中的最新进度，但它的持久化任务只能排队。
+        runtime.emit(progressEvent("glass-rail", 0.8f, 1920, 2400))
+
+        releaseFirstWrite.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.state.value.readerPreferences.autoSaveProgress)
+        assertEquals(
+            "in-flight write followed by disable flush is the complete write set",
+            listOf(0.2f, 0.8f),
+            library.progressWrites.map { it.progress }
+        )
+        assertEquals(0.8f, library.getEntry("glass-rail")!!.readingProgress, 0f)
+
+        clock = 1_000L
+        runtime.emit(progressEvent("glass-rail", 0.95f, 2280, 2400))
+        advanceUntilIdle()
+        assertEquals(
+            "progress arriving after disable must not become a late third write",
+            listOf(0.2f, 0.8f),
+            library.progressWrites.map { it.progress }
+        )
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun autoSaveDisableKeepsEnabledAndReportsEffectWhenFlushFails() = runTest {
+        val library = ProgressWriteTestRepository(
+            delegate = InMemoryLocalLibraryRepository(),
+            failWrites = true
+        )
+        val runtime = ManualRuntimeBridge()
+        val viewModel = KmdReaderViewModel(
+            repository = FakeWorkRepository(), runtimeBridge = runtime, localLibrary = library,
+            preferencesRepository = InMemoryReaderPreferencesRepository()
+        )
+        val effects = mutableListOf<KmdReaderEffect>()
+        val collector = launch { viewModel.effectFlow.toList(effects) }
+        advanceUntilIdle()
+        bringReaderToReady(viewModel, runtime, "glass-rail")
+
+        viewModel.onAction(KmdReaderAction.SetAutoSaveProgress(false))
+        advanceUntilIdle()
+        collector.cancel()
+
+        assertTrue(
+            "flush failure must leave the preference enabled so later progress is still protected",
+            viewModel.state.value.readerPreferences.autoSaveProgress
+        )
+        assertEquals(1, library.progressWrites.size)
+        assertTrue(
+            effects.contains(
+                KmdReaderEffect.ShowMessage("保存当前阅读进度失败，自动保存仍保持开启")
+            )
+        )
     }
 
     // ===== PR #5 审阅修复回归 =====
@@ -2034,6 +2152,68 @@ private class SourceMissingWorkRepository : WorkRepository {
 
     override suspend fun listIssues(workId: String, refresh: Boolean): List<ScriptIssue> =
         emptyList()
+}
+
+private data class ProgressWrite(
+    val workId: String,
+    val progress: Float,
+    val timeMs: Long?,
+    val durationMs: Long?,
+    val now: Long,
+    val revisionId: String?
+)
+
+/**
+ * 进度写测试替身：可将首笔 `updateProgress()` 停在调用方已取得 mutex 的位置，
+ * 并记录每次尝试写入。它让自动保存关闭的并发顺序不依赖调度器偶然时机。
+ */
+private class ProgressWriteTestRepository(
+    private val delegate: LocalLibraryRepository,
+    private val firstWriteStarted: CompletableDeferred<Unit>? = null,
+    private val releaseFirstWrite: CompletableDeferred<Unit>? = null,
+    private val failWrites: Boolean = false
+) : LocalLibraryRepository {
+    val progressWrites = mutableListOf<ProgressWrite>()
+    private var firstWriteSeen = false
+
+    override suspend fun updateProgress(
+        workId: String,
+        progress: Float,
+        timeMs: Long?,
+        durationMs: Long?,
+        now: Long,
+        revisionId: String?
+    ) {
+        progressWrites += ProgressWrite(workId, progress, timeMs, durationMs, now, revisionId)
+        if (!firstWriteSeen && releaseFirstWrite != null) {
+            firstWriteSeen = true
+            firstWriteStarted?.complete(Unit)
+            releaseFirstWrite.await()
+        }
+        if (failWrites) error("simulated progress write failure")
+        delegate.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
+    }
+
+    override suspend fun getEntry(workId: String): LocalLibraryEntry? = delegate.getEntry(workId)
+    override suspend fun getShelf(): List<LocalLibraryEntry> = delegate.getShelf()
+    override suspend fun getHistory(): List<LocalLibraryEntry> = delegate.getHistory()
+    override suspend fun upsertEntry(entry: LocalLibraryEntry) = delegate.upsertEntry(entry)
+    override suspend fun setOnShelf(workId: String, onShelf: Boolean) =
+        delegate.setOnShelf(workId, onShelf)
+    override suspend fun removeEntry(workId: String) = delegate.removeEntry(workId)
+    override suspend fun getLatestRevision(workId: String): LocalRevision? =
+        delegate.getLatestRevision(workId)
+    override suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision? =
+        delegate.findRevisionByContentHash(workId, contentHash)
+    override suspend fun getRevisionsForWork(workId: String): List<LocalRevision> =
+        delegate.getRevisionsForWork(workId)
+    override suspend fun saveRevision(revision: LocalRevision) = delegate.saveRevision(revision)
+    override suspend fun clearRevisionsForWork(workId: String) = delegate.clearRevisionsForWork(workId)
+    override suspend fun getDrafts(workId: String): List<LocalDraft> = delegate.getDrafts(workId)
+    override suspend fun getDraftsByType(workId: String, type: String): List<LocalDraft> =
+        delegate.getDraftsByType(workId, type)
+    override suspend fun saveDraft(draft: LocalDraft) = delegate.saveDraft(draft)
+    override suspend fun deleteDraft(id: String) = delegate.deleteDraft(id)
 }
 
 /**

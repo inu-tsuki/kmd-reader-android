@@ -11,6 +11,8 @@ import com.example.kmd_reader.data.repository.LocalAwareWorkRepository
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
 import com.example.kmd_reader.data.repository.OfflineFirstWorkRepository
 import com.example.kmd_reader.data.repository.RoomLocalLibraryRepository
+import com.example.kmd_reader.data.preferences.DataStoreReaderPreferencesRepository
+import com.example.kmd_reader.data.preferences.ReaderPreferencesRepository
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.webview.WebViewReaderRuntimeBridge
 
@@ -59,5 +61,9 @@ class KmdReaderAppContainer(context: Context) {
 
     val revisionSourceStore: RevisionSourceStore by lazy {
         RevisionSourceStore(appContext.filesDir)
+    }
+
+    val readerPreferencesRepository: ReaderPreferencesRepository by lazy {
+        DataStoreReaderPreferencesRepository(appContext)
     }
 }

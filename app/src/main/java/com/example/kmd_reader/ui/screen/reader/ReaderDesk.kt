@@ -75,6 +75,7 @@ fun ReaderDesk(
     runtimeBridge: ReaderRuntimeBridge?,
     onBackToDetail: () -> Unit,
     onOpenReview: () -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenIssues: () -> Unit,
     onRetryRuntime: () -> Unit,
     onReviewDecision: (String) -> Unit,
@@ -190,6 +191,10 @@ fun ReaderDesk(
                 onOpenReview = {
                     onReaderInteraction()
                     onOpenReview()
+                },
+                onOpenSettings = {
+                    onReaderInteraction()
+                    onOpenSettings()
                 },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -310,6 +315,7 @@ private fun ReaderTopOverlay(
     readerViewport: ReaderViewportState,
     onBackToDetail: () -> Unit,
     onOpenReview: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -353,6 +359,7 @@ private fun ReaderTopOverlay(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            TextButton(onClick = onOpenSettings) { Text("设置") }
             if (canToggleOrientation) {
                 OutlinedButton(onClick = {
                     // 主流视频 App 模式：点击只「轻推」一次方向，然后释放回跟随系统。

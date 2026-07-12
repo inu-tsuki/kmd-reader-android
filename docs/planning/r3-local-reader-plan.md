@@ -1,7 +1,7 @@
 # R3：完善的本地阅读器 —— 实施规划
 
 > 文档状态：规划草案
-> 最近更新：2026-07-11（R3-G/R3-H 已落地；R3-I 是下一 UI 优化切片）
+> 最近更新：2026-07-12（R3-G/R3-H/R3-I 已落地）
 > 代号：R3
 > 权威范围：本地数据模型、书架、导入、阅读进度持久化、设置、完整离线阅读体验
 
@@ -256,9 +256,9 @@ LocalAnnotation
 
 与 issue 分表：笔记是个人私有（无 severity、无 sourceRange 结构、无协作语义），字段集不同。R3 若精力允许可建表 + 基础 UI，否则纯预留 schema。
 
-### 2.8 reader_preferences（全局级，R3 不实现，记为空白）
+### 2.8 reader_preferences（全局级，R3-I 实现）
 
-播放速度、fontScale、reducedMotion、chrome pinned 策略、默认方向——这些不绑定作品。适合 **DataStore (Preferences)**，不适合 Room（无关系查询需求）。R3 暂不实现（无 UI 入口），记为已知空白。
+`fontScale`、主题、自动保存进度和 `reducedMotion` 不绑定作品，使用 **DataStore Preferences**，不进入 Room。R3-I 只实现这四项；播放速度、chrome pinned 和默认方向仍留后续。完整状态流、runtime settings 合并和自动保存竞态约束见 [`r3-i-reader-preferences-plan.md`](r3-i-reader-preferences-plan.md)。
 
 ### 2.9 discussion / 评论：归 R4
 
@@ -594,7 +594,7 @@ issue draft（写到一半的 message + suggestion + 锚点信息）写入 `loca
 
 已落地。实施决策与完整回归矩阵见 [`r3-h-work-detail-continuation-plan.md`](r3-h-work-detail-continuation-plan.md)。详情页只从 `shelfState` 的跨分组 lookup 获取本地状态；`ShelfItem` 投影保存时 revision，纯 resolver 与 `restoreSeekOnReady()` 共享“任一 revision 为空则兼容”的规则。中段且可恢复时才显示「继续阅读」及百分比/上次阅读摘要；完成或版本不兼容均显示「开始阅读」。本切片继续复用 `OpenReader` + Ready 后恢复链路，不新增 action 或 seek 路径。JVM 回归覆盖进度/revision/null 时间、时间边界、shelf/history lookup 和切换作品状态。
 
-### R3-I. 设置页（阅读偏好）— 下一 UI 优化
+### R3-I. 设置页（阅读偏好）— 已落地
 
 R3-F 已提供 `SettingsSheet` 入口；本切片只扩展这一既有 overlay，不新增 Desk 或将阅读设置混进作品元数据。
 
@@ -604,7 +604,9 @@ R3-F 已提供 `SettingsSheet` 入口；本切片只扩展这一既有 overlay�
 - 进度开关：关闭前先 flush 当前会话已节流但尚未落库的进度；关闭后停止后续节流写入，重新开启后恢复既有 5 秒 / 2% 阈值策略。
 - 范围外：不做每作品覆盖，不改 `.kmd` frontmatter，不在本切片加入缓存清理、账号或云端同步。
 
-验收：重启应用后偏好仍在；阅读中的字号和 reduced motion 生效且 runtime 不重建；主题切换不改变播放会话；自动保存开关不会丢弃关闭前已产生的进度；单测覆盖默认值、持久化恢复、开关 flush/停止写入与 runtime settings 映射。
+验收：重启应用后偏好仍在；Android 在初次 load 与 Ready 热更新中发送合并后的 `ReaderSettings`，且不重建 runtime host；主题切换不改变播放会话；自动保存开关不会丢弃关闭前已产生的进度；单测覆盖默认值、持久化恢复、开关 flush/停止写入与 settings 映射。`fontScale` / `reducedMotion` 的 runtime 消费和实际视觉效果由 `reader-runtime-web` 包的 mode matrix 与其门禁验收，不在 R3-I 的 Android 验收内。
+
+已使用 DataStore Preferences 持久化四项全局偏好；`ReaderSettingsResolver` 统一合并 viewport 与阅读偏好，Ready 会话热更新不重建 host，主题仅重组 Compose 根主题。自动保存关闭前 flush，之后进度写和 onCleared 均受同一门控保护。完整实施边界与回归矩阵见 [`r3-i-reader-preferences-plan.md`](r3-i-reader-preferences-plan.md)。
 
 ### R3-J. 笔记/书签（视精力，纯预留或最小实现）
 - local_annotations 表 + 基础 CRUD
@@ -626,9 +628,9 @@ R3-A 数据层（entry + revision + drafts [+ annotation]，无依赖）
   └─→ R3-J 笔记/书签（视精力）
 ```
 
-已完成：A → B → C → D → E → F → G。
+已完成：A → B → C → D → E → F → G → H → I。
 
-下一顺序：先完成 R1 错误恢复与 R2 companion/横屏手测作为体验质量门；本地资产线执行 G → H；I 是独立的下一 UI 优化，可在 G/H 期间并行设计或实现；J 视精力。
+下一顺序：R1 错误恢复与 R2 companion/横屏手测继续作为体验质量门；J 视精力。
 
 ## 5. 验收
 
