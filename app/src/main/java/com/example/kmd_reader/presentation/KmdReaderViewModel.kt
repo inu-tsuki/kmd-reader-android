@@ -13,6 +13,8 @@ import com.example.kmd_reader.data.repository.LocalDraft
 import com.example.kmd_reader.data.repository.LocalDraftTypes
 import com.example.kmd_reader.data.repository.LocalLibraryEntry
 import com.example.kmd_reader.data.repository.LocalLibraryRepository
+import com.example.kmd_reader.data.preferences.InMemoryReaderPreferencesRepository
+import com.example.kmd_reader.data.preferences.ReaderPreferencesRepository
 import com.example.kmd_reader.domain.kmd.KmdSourceMetadataParser
 import com.example.kmd_reader.domain.model.IssueSource
 import com.example.kmd_reader.domain.model.KmdImportMetadata
@@ -22,6 +24,7 @@ import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.WorkSourceType
 import com.example.kmd_reader.domain.policy.DeskStackPolicy
 import com.example.kmd_reader.domain.policy.ReaderViewportPolicy
+import com.example.kmd_reader.domain.policy.ReaderSettingsResolver
 import com.example.kmd_reader.runtime.FakeReaderRuntimeBridge
 import com.example.kmd_reader.runtime.ReaderLoadRequest
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
@@ -52,7 +55,8 @@ class KmdReaderViewModel(
         java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-bundles"),
         java.io.File(System.getProperty("java.io.tmpdir", "/tmp"), "noop-cache")
     ),
-    private val appContext: android.content.Context? = null
+    private val appContext: android.content.Context? = null,
+    private val preferencesRepository: ReaderPreferencesRepository = InMemoryReaderPreferencesRepository()
 ) : ViewModel() {
     val runtimeBridgeForHost: ReaderRuntimeBridge
         get() = runtimeBridge
@@ -69,6 +73,9 @@ class KmdReaderViewModel(
     // 进度事件会误中旧 work 的节流窗口被丢弃。改为 map by workId，map 不含该 key 即首次落盘。
     // （这也替代了原先的 hasSavedProgress 标志——不存在 key 即首次，无需独立标志。）
     private val lastProgressSavedAt = mutableMapOf<String, Long>()
+    // Serializes throttled writes, the disable-time flush, and onCleared. Once disabled is
+    // committed in memory, a queued ProgressChanged observes that gate before writing.
+    private val progressPersistenceMutex = kotlinx.coroutines.sync.Mutex()
 
     // R3-C：issue 草稿 debounce 自动保存。按 draftId 记录上次落盘时间戳，与进度节流同构。
     private val lastDraftSavedAt = mutableMapOf<String, Long>()
@@ -95,6 +102,7 @@ class KmdReaderViewModel(
 
     init {
         observeRuntimeEvents()
+        observeReaderPreferences()
         refreshWorks()
         refreshShelf()
     }
@@ -147,6 +155,12 @@ class KmdReaderViewModel(
             KmdReaderAction.JumpSelectedSourceLineToPlayback -> jumpSelectedSourceLineToPlayback()
             KmdReaderAction.RetryReaderRuntime -> retryReaderRuntime()
             is KmdReaderAction.UpdateReaderHostSize -> updateReaderHostSize(action)
+            is KmdReaderAction.SetReaderFontScale -> updateFontScale(action.fontScale)
+            is KmdReaderAction.PreviewReaderFontScale -> reduce(action)
+            is KmdReaderAction.SetThemeMode -> updateThemeMode(action.themeMode)
+            is KmdReaderAction.SetReducedMotion -> updateReducedMotion(action.enabled)
+            is KmdReaderAction.SetAutoSaveProgress -> updateAutoSaveProgress(action.enabled)
+            KmdReaderAction.CloseCurrentDesk -> closeCurrentDesk()
             KmdReaderAction.OpenImport -> {
                 reduce(action)
                 sendEffect(KmdReaderEffect.OpenImportPicker)
@@ -155,6 +169,84 @@ class KmdReaderViewModel(
             KmdReaderAction.CancelImport -> reduce(action)
             is KmdReaderAction.ToggleShelf -> toggleShelf(action.workId)
             else -> reduce(action)
+        }
+    }
+
+    private fun observeReaderPreferences() {
+        viewModelScope.launch {
+            preferencesRepository.preferences.collect { preferences ->
+                val before = _state.value.readerPreferences
+                _state.update { it.copy(readerPreferences = preferences) }
+                if (
+                    (before.fontScale != preferences.fontScale || before.reducedMotion != preferences.reducedMotion) &&
+                    _state.value.readerSession is ReaderSessionState.Ready
+                ) {
+                    updateRuntimeSettingsForReadySession()
+                }
+            }
+        }
+    }
+
+    private fun updateFontScale(fontScale: Float) {
+        val normalized = com.example.kmd_reader.data.preferences.ReaderPreferences.normalizedFontScale(fontScale)
+        reduce(KmdReaderAction.SetReaderFontScale(normalized))
+        persistPreference { preferencesRepository.setFontScale(normalized) }
+        updateRuntimeSettingsForReadySession()
+    }
+
+    private fun updateThemeMode(themeMode: com.example.kmd_reader.data.preferences.ThemeMode) {
+        reduce(KmdReaderAction.SetThemeMode(themeMode))
+        persistPreference { preferencesRepository.setThemeMode(themeMode) }
+    }
+
+    private fun updateReducedMotion(enabled: Boolean) {
+        reduce(KmdReaderAction.SetReducedMotion(enabled))
+        persistPreference { preferencesRepository.setReducedMotion(enabled) }
+        updateRuntimeSettingsForReadySession()
+    }
+
+    private fun updateAutoSaveProgress(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                progressPersistenceMutex.withLock {
+                if (!enabled && _state.value.readerPreferences.autoSaveProgress) {
+                    flushCurrentProgressLocked()
+                    reduce(KmdReaderAction.SetAutoSaveProgress(false))
+                    lastProgressSavedAt.clear()
+                } else {
+                    reduce(KmdReaderAction.SetAutoSaveProgress(enabled))
+                    if (enabled) lastProgressSavedAt.clear()
+                }
+                runCatching { preferencesRepository.setAutoSaveProgress(enabled) }
+                    .onFailure { sendEffect(KmdReaderEffect.ShowMessage("保存阅读偏好失败")) }
+                }
+            }.onFailure {
+                sendEffect(KmdReaderEffect.ShowMessage("保存当前阅读进度失败，自动保存仍保持开启"))
+            }
+        }
+    }
+
+    private fun persistPreference(write: suspend () -> Unit) {
+        viewModelScope.launch {
+            runCatching { write() }.onFailure {
+                sendEffect(KmdReaderEffect.ShowMessage("保存阅读偏好失败"))
+            }
+        }
+    }
+
+    private fun closeCurrentDesk() {
+        val activeDesk = _state.value.deskStack.desks.getOrNull(_state.value.deskStack.activeIndex)
+        if (activeDesk != Desk.Reader) {
+            reduce(KmdReaderAction.CloseCurrentDesk)
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                progressPersistenceMutex.withLock {
+                    if (_state.value.readerPreferences.autoSaveProgress) flushCurrentProgressLocked()
+                }
+            }.onFailure { sendEffect(KmdReaderEffect.ShowMessage("保存当前阅读进度失败")) }
+            reduce(KmdReaderAction.CloseCurrentDesk)
         }
     }
 
@@ -415,7 +507,7 @@ class KmdReaderViewModel(
                         work = work,
                         source = source,
                         assetManifest = work.assetManifest?.toReaderRuntimeAssetManifest(),
-                        settings = ReaderViewportPolicy.settingsFor(resolvedViewport)
+                        settings = ReaderSettingsResolver.resolve(resolvedViewport, _state.value.readerPreferences)
                     )
                 )
             }.onFailure { error ->
@@ -758,20 +850,17 @@ class KmdReaderViewModel(
         timeMs: Long?,
         durationMs: Long?
     ) {
-        val now = nowMillis()
-        // map 不含该 workId 即首次落盘，无脑写一笔；之后按 PROGRESS_SAVE_INTERVAL_MS 节流。
-        val last = lastProgressSavedAt[workId]
-        if (last != null && now - last < PROGRESS_SAVE_INTERVAL_MS) {
-            return
-        }
-        lastProgressSavedAt[workId] = now
-        // F4-rev：随进度写入当前 revisionId，让 DB entry 携带「上次存进度时的播放版本」。
-        // restoreSeekOnReady 据此判断是否换源/换版本，决定是否恢复断点。
-        val revisionId = _state.value.sourceSnapshotsByWorkId[workId]?.revisionId
         viewModelScope.launch {
-            runCatching {
-                localLibrary.updateProgress(workId, progress, timeMs, durationMs, now, revisionId)
-            }.onSuccess {
+            val saved = progressPersistenceMutex.withLock {
+                if (!_state.value.readerPreferences.autoSaveProgress) return@withLock false
+                val now = nowMillis()
+                val last = lastProgressSavedAt[workId]
+                if (last != null && now - last < PROGRESS_SAVE_INTERVAL_MS) return@withLock false
+                lastProgressSavedAt[workId] = now
+                val revisionId = _state.value.sourceSnapshotsByWorkId[workId]?.revisionId
+                runCatching { localLibrary.updateProgress(workId, progress, timeMs, durationMs, now, revisionId) }.isSuccess
+            }
+            if (saved) {
                 // R3-F：进度写库后刷新 shelfState，否则书架/历史卡片在同会话内 stale。
                 // updateProgress 设置 lastReadAt → 该 work 进入历史列表；已有书架条目的进度/时间也同步。
                 refreshShelf()
@@ -1047,7 +1136,7 @@ class KmdReaderViewModel(
         viewModelScope.launch {
             runCatching {
                 runtimeBridge.updateSettings(
-                    ReaderViewportPolicy.settingsFor(_state.value.readerViewport)
+                    ReaderSettingsResolver.resolve(_state.value.readerViewport, _state.value.readerPreferences)
                 )
             }.onFailure {
                 sendEffect(KmdReaderEffect.ShowMessage("阅读画布适配失败"))
@@ -1264,19 +1353,27 @@ class KmdReaderViewModel(
     internal fun flushProgressOnCleared() {
         runCatching {
             runBlocking {
-                val session = _state.value.readerSession as? ReaderSessionState.Ready
-                    ?: return@runBlocking
-                // F4-rev：flush 也写 revisionId，保持与 persistProgressIfNeeded 一致。
-                val revisionId = _state.value.sourceSnapshotsByWorkId[session.workId]?.revisionId
-                localLibrary.updateProgress(
-                    workId = session.workId,
-                    progress = session.progress,
-                    timeMs = session.timeMs,
-                    durationMs = session.durationMs,
-                    now = nowMillis(),
-                    revisionId = revisionId
-                )
+                progressPersistenceMutex.withLock {
+                    if (_state.value.readerPreferences.autoSaveProgress) flushCurrentProgressLocked()
+                }
             }
+        }
+    }
+
+    private suspend fun flushCurrentProgressLocked() {
+        val session = _state.value.readerSession as? ReaderSessionState.Ready ?: return
+        val revisionId = _state.value.sourceSnapshotsByWorkId[session.workId]?.revisionId
+        localLibrary.updateProgress(session.workId, session.progress, session.timeMs, session.durationMs, nowMillis(), revisionId)
+    }
+
+    private fun updateRuntimeSettingsForReadySession() {
+        if (_state.value.readerSession !is ReaderSessionState.Ready) return
+        viewModelScope.launch {
+            runCatching {
+                runtimeBridge.updateSettings(
+                    ReaderSettingsResolver.resolve(_state.value.readerViewport, _state.value.readerPreferences)
+                )
+            }.onFailure { sendEffect(KmdReaderEffect.ShowMessage("阅读设置应用失败")) }
         }
     }
 
@@ -1285,12 +1382,13 @@ class KmdReaderViewModel(
         private val runtimeBridge: ReaderRuntimeBridge,
         private val localLibrary: LocalLibraryRepository,
         private val bundleStore: BundleStore,
-        private val appContext: android.content.Context
+        private val appContext: android.content.Context,
+        private val preferencesRepository: ReaderPreferencesRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(KmdReaderViewModel::class.java)) {
-                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary, bundleStore, appContext) as T
+                return KmdReaderViewModel(repository, runtimeBridge, System::currentTimeMillis, localLibrary, bundleStore, appContext, preferencesRepository) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

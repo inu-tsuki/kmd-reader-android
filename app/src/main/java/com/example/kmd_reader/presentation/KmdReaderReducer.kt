@@ -326,6 +326,26 @@ object KmdReaderReducer {
             KmdReaderAction.CloseSettings -> state.copy(
                 deskStack = DeskStackPolicy.closeSettings(state.deskStack)
             )
+
+            is KmdReaderAction.SetReaderFontScale -> state.copy(
+                readerPreferences = state.readerPreferences.copy(fontScale = action.fontScale)
+            )
+
+            is KmdReaderAction.PreviewReaderFontScale -> state.copy(
+                readerPreferences = state.readerPreferences.copy(fontScale = action.fontScale)
+            )
+
+            is KmdReaderAction.SetThemeMode -> state.copy(
+                readerPreferences = state.readerPreferences.copy(themeMode = action.themeMode)
+            )
+
+            is KmdReaderAction.SetAutoSaveProgress -> state.copy(
+                readerPreferences = state.readerPreferences.copy(autoSaveProgress = action.enabled)
+            )
+
+            is KmdReaderAction.SetReducedMotion -> state.copy(
+                readerPreferences = state.readerPreferences.copy(reducedMotion = action.enabled)
+            )
         }
 
     private fun selectIssue(
