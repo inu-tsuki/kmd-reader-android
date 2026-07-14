@@ -26,7 +26,11 @@
 
 ## R3 工作包文档
 
-- [R3 完善本地阅读器规划](r3-local-reader-plan.md)：R3-F/G/H 已落地；R3-I 阅读偏好是后续切片。
+- [R3 完善本地阅读器规划](r3-local-reader-plan.md)：R3-F/G/H/I 已落地；R3-K 书架体验收束已完成规划。
 - [R3-H 详情页续读状态实施计划](r3-h-work-detail-continuation-plan.md)
 - [R3-H 实现者提示词](prompts/r3-h-implementation-prompt.md)
+- [R3-I 全局阅读偏好实施计划](r3-i-reader-preferences-plan.md)
+- [R3-I 实现者提示词](prompts/r3-i-implementation-prompt.md)
+- [R3-K 书架体验收束计划](r3-k-bookshelf-experience-plan.md)
+- [R3-K1 实现者提示词](prompts/r3-k1-implementation-prompt.md)
 - [R3-D 本地导入调研与方案讨论](r3-d-local-import-research.md)（调研稿，未定论：frontmatter drift 核实、`.kmdwork` 打包格式选项、待拍板问题）

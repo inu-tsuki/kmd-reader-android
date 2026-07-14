@@ -3,197 +3,345 @@ package com.example.kmd_reader.ui.screen.mine
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.kmd_reader.presentation.ImportState
 import com.example.kmd_reader.ui.component.InfoCard
 import com.example.kmd_reader.ui.component.KmdPill
 import com.example.kmd_reader.ui.component.SectionTitle
-import com.example.kmd_reader.ui.format.formatRelativeReadTime
 
-/**
- * R3-F：书架桌面（page-architecture §7.1）。
- *
- * 分两组展示本地作品：
- * - 书架（onShelf=true）：本地导入、收藏、离线可读的作品。
- * - 阅读历史（lastReadAt!=null 且 onShelf=false）：读过但未收藏的社区/mock 作品。
- *
- * 卡片显示标题、进度条、时间，并有「继续阅读」/「打开详情」按钮。
- * 底部提供导入和设置/关于入口。
- */
+/** R3-K1 阅读资产首页：投影先行，单个网格滚动容器负责所有书架内容。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MineDesk(
     shelfState: ShelfState,
+    importState: ImportState,
+    selectedView: BookshelfView,
+    nowMillis: Long,
+    onBookshelfViewChange: (BookshelfView) -> Unit,
     onOpenImport: () -> Unit,
     onOpenWork: (String) -> Unit,
     onContinueReading: (String) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    val bookshelf = shelfState.toBookshelfUiModel(selectedView, nowMillis)
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 300.dp),
         modifier = modifier
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        SectionTitle(
-            title = "书架",
-            subtitle = "本地导入、收藏和离线可读的作品。"
-        )
-        if (shelfState.shelf.isEmpty()) {
-            InfoCard(
-                title = "还没有作品",
-                body = "导入 .kmd 或 .kmdwork 文件开始阅读。",
-                actionLabel = "导入",
-                onAction = onOpenImport
-            )
-        } else {
-            shelfState.shelf.forEach { item ->
-                ShelfCard(
-                    item = item,
-                    onOpenWork = onOpenWork,
-                    onContinueReading = onContinueReading
-                )
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            BookshelfToolbar(onOpenImport = onOpenImport, onOpenSettings = onOpenSettings)
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                BookshelfView.entries.forEachIndexed { index, view ->
+                    SegmentedButton(
+                        selected = selectedView == view,
+                        onClick = { onBookshelfViewChange(view) },
+                        shape = SegmentedButtonDefaults.itemShape(index, BookshelfView.entries.size),
+                        modifier = Modifier.testTag("bookshelf-view-${view.name}")
+                    ) {
+                        Text(if (view == BookshelfView.Library) "书架" else "历史")
+                    }
+                }
             }
         }
+        importStateContent(importState, onOpenImport)
 
-        Spacer(Modifier.height(4.dp))
-
-        SectionTitle(
-            title = "阅读历史",
-            subtitle = "最近阅读过的作品。"
-        )
-        if (shelfState.history.isEmpty()) {
-            Text(
-                text = "还没有阅读记录。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        when (bookshelf.view) {
+            BookshelfView.Library -> libraryContent(
+                bookshelf = bookshelf,
+                onOpenImport = onOpenImport,
+                onOpenWork = onOpenWork,
+                onContinueReading = onContinueReading
             )
-        } else {
-            shelfState.history.forEach { item ->
-                ShelfCard(
-                    item = item,
-                    onOpenWork = onOpenWork,
-                    onContinueReading = onContinueReading
-                )
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Button(onClick = onOpenImport) {
-                Text("导入脚本")
-            }
-            OutlinedButton(onClick = onOpenSettings) {
-                Text("设置 / 关于")
-            }
+            BookshelfView.History -> historyContent(
+                bookshelf = bookshelf,
+                onOpenWork = onOpenWork,
+                onContinueReading = onContinueReading
+            )
         }
     }
 }
 
-/**
- * 书架/历史卡片。显示标题、作者、形态 pill、进度条、时间，
- * 以及「继续阅读」或「打开详情」按钮。
- */
-@Composable
-private fun ShelfCard(
-    item: ShelfItem,
-    onOpenWork: (String) -> Unit,
-    onContinueReading: (String) -> Unit,
-    modifier: Modifier = Modifier
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.importStateContent(
+    importState: ImportState,
+    onOpenImport: () -> Unit
 ) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    when (importState) {
+        ImportState.Idle -> Unit
+        ImportState.Importing -> item(span = { GridItemSpan(maxLineSpan) }) {
+            ImportStatus(title = "正在导入作品…", body = "正在处理所选文件，请稍候。")
+        }
+        is ImportState.Failed -> item(span = { GridItemSpan(maxLineSpan) }) {
+            ImportStatus(
+                title = "导入失败",
+                body = importState.message,
+                actionLabel = "重新选择文件",
+                onAction = onOpenImport
+            )
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.libraryContent(
+    bookshelf: BookshelfUiModel,
+    onOpenImport: () -> Unit,
+    onOpenWork: (String) -> Unit,
+    onContinueReading: (String) -> Unit
+) {
+    section(
+        cards = bookshelf.continueReading,
+        key = "continue",
+        title = "继续阅读",
+        subtitle = "最近读到一半的作品",
+        onOpenWork = onOpenWork,
+        onContinueReading = onContinueReading
+    )
+    if (bookshelf.emptyState == BookshelfEmptyState.Library) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            InfoCard(
+                title = "还没有作品",
+                body = "导入 .kmd 或 .kmdwork 文件开始阅读。",
+                actionLabel = "导入作品",
+                onAction = onOpenImport
+            )
+        }
+        return
+    }
+    section(
+        cards = bookshelf.localShelf,
+        key = "local",
+        title = "本地可读",
+        subtitle = "已在此设备保存 source 的作品",
+        onOpenWork = onOpenWork,
+        onContinueReading = onContinueReading
+    )
+    section(
+        cards = bookshelf.networkShelf,
+        key = "network",
+        title = "需联网",
+        subtitle = "仅保存作品信息，阅读时需要远端 source",
+        onOpenWork = onOpenWork,
+        onContinueReading = onContinueReading
+    )
+}
+
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.historyContent(
+    bookshelf: BookshelfUiModel,
+    onOpenWork: (String) -> Unit,
+    onContinueReading: (String) -> Unit
+) {
+    if (bookshelf.emptyState == BookshelfEmptyState.History) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            InfoCard(title = "还没有阅读记录", body = "开始阅读后，作品会出现在这里。")
+        }
+    } else {
+        section(
+            cards = bookshelf.history,
+            key = "history",
+            title = "阅读历史",
+            subtitle = "最近阅读过但未放入书架的作品",
+            onOpenWork = onOpenWork,
+            onContinueReading = onContinueReading
+        )
+    }
+}
+
+private fun androidx.compose.foundation.lazy.grid.LazyGridScope.section(
+    cards: List<BookshelfCardModel>,
+    key: String,
+    title: String,
+    subtitle: String,
+    onOpenWork: (String) -> Unit,
+    onContinueReading: (String) -> Unit
+) {
+    if (cards.isEmpty()) return
+    item(span = { GridItemSpan(maxLineSpan) }) {
+        SectionTitle(title = title, subtitle = subtitle)
+    }
+    items(cards, key = { "$key-${it.workId}" }) { item ->
+        ShelfCard(item, "$key-${item.workId}", onOpenWork, onContinueReading)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookshelfToolbar(onOpenImport: () -> Unit, onOpenSettings: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpenWork(item.workId) }
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleMedium,
+                "书架",
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "by ${item.authorName}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                "继续阅读与已保存的作品",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            KmdPill(text = item.modeLabel)
-            // 进度条：0% 时隐藏，避免无进度作品显示空条。
-            if (item.readingProgress > 0f && item.readingProgress < 1f) {
-                LinearProgressIndicator(
-                    progress = { item.readingProgress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            // 时间文本：优先 lastReadAt，其次 importedAt；都没有不显示。
-            formatTimeLabel(item)?.let { timeLabel ->
-                Text(
-                    text = timeLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 有进度且有本地源 → 继续阅读（直达 Reader）；否则打开详情。
-                if (item.readingProgress > 0f && item.hasLocalSource) {
-                    Button(onClick = { onContinueReading(item.workId) }) {
-                        Text("继续阅读")
-                    }
+        }
+        Row {
+            TooltipBox(
+                positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = { PlainTooltip { Text("导入作品") } },
+                state = rememberTooltipState()
+            ) {
+                IconButton(onClick = onOpenImport, modifier = Modifier.semantics { contentDescription = "导入作品" }) {
+                    Icon(Icons.Outlined.FileOpen, contentDescription = null)
                 }
-                OutlinedButton(onClick = { onOpenWork(item.workId) }) {
-                    Text("打开详情")
+            }
+            TooltipBox(
+                positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = { PlainTooltip { Text("打开阅读设置") } },
+                state = rememberTooltipState()
+            ) {
+                IconButton(onClick = onOpenSettings, modifier = Modifier.semantics { contentDescription = "打开阅读设置" }) {
+                    Icon(Icons.Outlined.Settings, contentDescription = null)
                 }
             }
         }
     }
 }
 
-/**
- * 格式化时间标签：有 lastReadAt → "上次阅读 X 天前"；
- * 否则有 importedAt → "导入于 X 天前"；都没有 → null（不显示）。
- * 用 now（调用时取 System.currentTimeMillis）做差值，粗粒度天数格式化。
- */
-private fun formatTimeLabel(item: ShelfItem): String? {
-    val now = System.currentTimeMillis()
-    item.lastReadAt?.let { last ->
-        return "上次阅读 ${formatRelativeReadTime(now, last)}"
+@Composable
+private fun ImportStatus(
+    title: String,
+    body: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(body, style = MaterialTheme.typography.bodyMedium)
+            if (actionLabel != null && onAction != null) {
+                OutlinedButton(onClick = onAction) { Text(actionLabel) }
+            }
+        }
     }
-    item.importedAt?.let { imported ->
-        return "导入于 ${formatRelativeReadTime(now, imported)}"
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ShelfCard(
+    item: BookshelfCardModel,
+    cardKey: String,
+    onOpenWork: (String) -> Unit,
+    onContinueReading: (String) -> Unit
+) {
+    Card(
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenWork(item.workId) }
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = if (item.authorName.isBlank()) "作者未知" else "by ${item.authorName}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    KmdPill(item.modeLabel)
+                    KmdPill(item.sourceLabel)
+                }
+                item.progress?.let { progress ->
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                }
+                item.timeLabel?.let { timeLabel ->
+                    Text(timeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (item.canContinue) {
+                    Button(
+                        onClick = { onContinueReading(item.workId) },
+                        modifier = Modifier.testTag("continue-$cardKey")
+                    ) { Text("继续阅读") }
+                }
+                OutlinedButton(
+                    onClick = { onOpenWork(item.workId) },
+                    modifier = Modifier.testTag("details-$cardKey")
+                ) { Text("打开详情") }
+            }
+        }
     }
-    return null
 }
