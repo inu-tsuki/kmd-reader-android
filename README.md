@@ -25,7 +25,7 @@ Android 侧开发，而不是继续扩张旧 R3 切片。
 
 ## 演示视频
 
-> B 站演示视频链接将在创建 `v1.0-release` 最终提交前补入。
+- [KMD Reader Android 两分钟功能演示](https://www.bilibili.com/video/BV1HxN86vEJJ/)
 
 ## 已交付能力
 
