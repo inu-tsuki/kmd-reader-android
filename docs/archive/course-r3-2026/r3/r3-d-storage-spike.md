@@ -7,7 +7,7 @@
 > 上游：
 > - [`r3-d-local-import-research.md`](r3-d-local-import-research.md) §6.6 / §6.8 / §7.4（问题全景与待补技术信息清单）
 > - [`r3-local-reader-plan.md`](r3-local-reader-plan.md) §2.5（`LocalLibraryEntry`）/ §2.7（本地提交模型）
-> - 主仓库 [`docs/knowledge/architecture/work-bundle-format.md`](../../../../docs/knowledge/architecture/work-bundle-format.md)（`.kmdwork` 容器决议基线 B1–B9）
+> - 主仓库 [`docs/knowledge/architecture/work-bundle-format.md`](../../../../../../docs/knowledge/architecture/work-bundle-format.md)（`.kmdwork` 容器决议基线 B1–B9）
 
 ## 0. 钉死的约束（不在本文重开讨论）
 

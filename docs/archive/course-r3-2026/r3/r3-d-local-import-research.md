@@ -49,7 +49,7 @@ R3-D 的目标（见 r3-local-reader-plan.md §R3-D）：用户能导入本地�
 - **必须含**：#1（entry `.kmd` 源全文，含 frontmatter）、#5（assetManifest + assets 字节——否则带外部资产的脚本会缺资源）。
 - **应预留/倾向含**：#6（`presentation` 派生投影或导出时快照）、#4 的本地 revision manifest / origin mapping。它们服务离线列表、导出、下载为本地、本地协作和版本管理，但不应成为 `.kmd` 脚本内部的作者手写事实。
 - **不作为本地权威**：
-  - #3 的社区状态部分（commentSummary / lifecycle / review status / ranking）—— [`work-kmd-content-model.md`](../../../../docs/knowledge/architecture/work-kmd-content-model.md) 已明确"平台状态不进源文件"。离线 bundle 最多保存导出时快照，并标注它可能过期。
+  - #3 的社区状态部分（commentSummary / lifecycle / review status / ranking）—— [`work-kmd-content-model.md`](../../../../../../docs/knowledge/architecture/work-kmd-content-model.md) 已明确"平台状态不进源文件"。离线 bundle 最多保存导出时快照，并标注它可能过期。
   - 云端颁发的 workId / revisionId 不应被本地作品当作唯一身份。可以保存 remote origin mapping，但本地 identity 仍需由 bundle/revision 模型单独定义。
 
 ---
@@ -98,7 +98,7 @@ frontmatter drift 应独立成一个**前置子项**（暂称 R3-D0，或并入 
 - 哪些字段只是特定宿主/editor 的工作区偏好，不应进入可发布/可导入作品？
 - `mode` 是否仍是单纯呈现模式，还是应和 capability 声明形成一套可演进关系？
 
-相关生态草案：[`presentation-modes-and-capability-layering-draft.md`](../../../../docs/planning/ecosystem/presentation-modes-and-capability-layering-draft.md) 已指出 KMD 可能覆盖视频素材、字幕、提词器、叙事作品等多形态输出，`mode` 与能力集的关系仍是开放问题。R3-D 的 frontmatter schema 不宜绕过这层讨论直接定稿。
+相关生态草案：[`presentation-modes-and-capability-layering-draft.md`](../../../../../../docs/planning/ecosystem/presentation-modes-and-capability-layering-draft.md) 已指出 KMD 可能覆盖视频素材、字幕、提词器、叙事作品等多形态输出，`mode` 与能力集的关系仍是开放问题。R3-D 的 frontmatter schema 不宜绕过这层讨论直接定稿。
 
 ---
 

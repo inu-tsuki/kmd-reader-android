@@ -506,4 +506,4 @@ ReaderDesk
 
 ## 10. 路线指针
 
-阶段 D0（WebView 宿主 + `dist/reader-runtime` 产物消费）已完成，见 §阶段 D 实现状态。后续优先级以 [`roadmap.md`](../roadmap.md) 为准，本计划不复写当前任务清单。
+阶段 D0（WebView 宿主 + `dist/reader-runtime` 产物消费）已完成，见 §阶段 D 实现状态。后续优先级以 [`roadmap.md`](../../../planning/roadmap.md) 为准，本计划不复写当前任务清单。

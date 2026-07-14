@@ -1,9 +1,10 @@
 # R4：完善的云端社区阅读器 —— reader 侧子任务
 
-> 文档状态：规划草案
-> 最近更新：2026-06-19
+> 文档状态：已归档的早期设想，不是接口或实施规范
+> 最近更新：2026-07-14
 > 代号：R4
-> 权威范围：本文档为 reader 侧子任务规划。R4 是多仓库协同任务，**总规划在主仓库** `docs/planning/roadmap/` 下，涵盖 community-api + runtime + reader 三方职责。
+> 失效提示：本文包含 `local_issue_overrides` 等从未成为 R3 实现事实的假设。未来必须以届时
+> community API、runtime 协议和 Android 数据模型重新调研，不得直接照此实现。
 
 ## 定位
 

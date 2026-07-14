@@ -1,45 +1,36 @@
 # KMD Reader Android 文档索引
 
-> 最近更新：2026-07-10
+> 最近更新：2026-07-14
+> 仓库状态：课程至 R3 阶段完成，维护休眠
 
-`docs/` 按用途分成三类：开发规划、知识库、归档。新增文档时先判断它是“接下来要做什么”，还是“长期事实是什么”，或只是“历史记录”。
+`docs/` 按用途分为当前规划入口、长期知识和历史归档。
 
-## 开发规划：`planning/`
+## 当前入口
 
-放仍会影响后续开发顺序、课程交付、阶段切分或 runtime 接入路线的文档。
+- [冻结 Roadmap](planning/roadmap.md)：本阶段完成边界、长期不变量与维护状态。
+- [Post-R3 重启 Backlog](planning/post-r3-reentry-backlog.md)：未来恢复开发前的唯一检查入口。
 
-- [Roadmap](planning/roadmap.md)：Android Reader 路线、技术风险和后续开发顺序的权威入口。
-- [PRD](planning/product/prd.md)：课程第一阶段需求文档。
-- [阅读体验规划](planning/product/reading-experience-plan.md)：阅读浮层手势、横竖屏 viewport 和审阅脚本查阅。
-- [Script Reader 与社区交互](planning/product/scriptreader-community-interaction.md)：阅读、审阅、issue 和 discussion 的社区交互边界。
-- [Issue Lifecycle Flow](planning/product/issue-lifecycle-flow.md)：issue 的提出、跳转、关闭和重开模式。
-- [Runtime 实现方案](planning/runtime/runtime-implementation-plan.md)：真实 reader runtime 接入 Android 的实现计划。
-- [ViewModel 与 Runtime Bridge 规划](planning/runtime/viewmodel-runtime-plan.md)：ViewModel、Repository 和 runtime bridge 的分层设计。
-- [Runtime UI 抽取计划](planning/runtime/runtime-ui-extraction-plan.md)：runtime UI 相关的源码上下文、anchor 和 companion 边界。
-- [第二阶段计划](planning/stages/stage-2-plan.md)：MVP、页面流转、数据实体和仓库结构。
-- [第三阶段数据与网络规划](planning/stages/stage-3-data-network-plan.md)：Retrofit、Room、Repository 与测试。
-- [第五阶段集成测试报告](planning/stages/stage-5-integration-test-report.md)：集成测试用例、Bug 清单和性能检查记录。
-- [R3 完善本地阅读器规划](planning/r3-local-reader-plan.md)：本地数据、导入、书架与阅读偏好的当前工作包；R3-F 已落地，R3-I 是下一 UI 优化切片。
+Android 当前没有活跃实施切片。旧计划中的“下一步”不代表现行优先级。
 
-Runtime 相关计划应以主仓库协议文档 `docs/knowledge/integration/android-webview-runtime-protocol.md` 作为契约源。
+## 长期知识
 
-## 知识库：`knowledge/`
+- [应用架构](knowledge/architecture/app-architecture.md)
+- [页面架构](knowledge/architecture/page-architecture.md)
+- [UI Design](knowledge/architecture/ui-design.md)
+- [Core 可移植性与 WebView 宿主可行性](knowledge/integration/core-portability-webview-feasibility.md)
 
-放长期有效、可反复查阅的架构事实和集成经验。
+主仓库的 Android-Web runtime 协议与 bundle 文档仍是跨仓库契约源；Android 不复制 runtime 语义。
 
-- [应用架构](knowledge/architecture/app-architecture.md)：Android 应用分层、状态和桌面导航模型。
-- [页面架构](knowledge/architecture/page-architecture.md)：页面结构和流转说明。
-- [UI Design](knowledge/architecture/ui-design.md)：阅读态全屏 runtime、浮层控件和审阅边栏的界面契约。
-- [Core 可移植性与 WebView 宿主可行性](knowledge/integration/core-portability-webview-feasibility.md)：为什么 Android 不复制 core，以及 WebView 宿主边界。
+## 历史归档
 
-## 归档：`archive/`
+- [2026 Android 课程至 R3 阶段](archive/course-r3-2026/README.md)
 
-放不再作为当前事实来源、但仍值得保留的历史材料。当前暂无归档文档。
+归档保存产品草案、课程阶段、runtime 接入过程、R3 计划/提示词/证据以及旧 R4 假设。它们用于
+追溯，不用于直接恢复实施。
 
 ## 放置规则
 
-- 阶段顺序、roadmap、课程提交计划：放 `planning/`。
-- 长期架构、宿主协议、集成边界：放 `knowledge/`。
-- 过期方案、旧讨论、被替代的计划：放 `archive/`。
-- 如果一份规划已经变成长期机制，移动到 `knowledge/` 并更新引用。
-- 如果一份文档不再指导当前开发，移动到 `archive/` 并在当前文档中保留必要结论。
+- 当前阶段与恢复顺序放 `planning/`；休眠期只保留少量权威入口。
+- 已验证、长期有效的架构与集成事实放 `knowledge/`。
+- 已完成计划、旧讨论、证据和被替代方案放 `archive/`。
+- 未来恢复时先校准知识文档，再创建新的阶段计划；不要把归档文件直接移回 planning。

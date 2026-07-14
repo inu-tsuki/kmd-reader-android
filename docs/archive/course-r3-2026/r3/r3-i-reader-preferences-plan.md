@@ -166,7 +166,7 @@ Disabled
   reader host、session 或播放位置。设置入口因此在活跃阅读会话中可达。
 - R3-I 的 Android 边界是持久化偏好、合并 `ReaderSettings`、在 load/Ready 时发送协议，并保持
   host/session 稳定。`fontScale` 的 measurement、render、mode matrix 与重排实现属于主仓库
-  [`reader-runtime-web` package plan](../../../../docs/planning/packages/reader-runtime-web.md)，不作为
+  [`reader-runtime-web` package plan](../../../../../../docs/planning/packages/reader-runtime-web.md)，不作为
   R3-I 的独立视觉验收项。
 - 自动保存保证应用仍存活时的显式边界：离开 Reader 时 flush，`onCleared` 兜底；关闭后停止
   写入，重开后恢复。后台、系统强杀和 force-stop 不承诺执行最后一次 flush。
