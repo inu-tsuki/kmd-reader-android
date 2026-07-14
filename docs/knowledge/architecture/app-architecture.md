@@ -1,8 +1,11 @@
 # KMD Reader Android 应用架构
 
-> 项目阶段：第二阶段架构设计
-> 文档状态：草案
-> 最近更新：2026-05-26
+> 来源阶段：第二阶段架构设计
+> 文档状态：长期架构边界；课程期实施节奏仅作历史说明
+> 最近更新：2026-07-14
+
+本文保留早期“第二阶段”措辞用于解释架构为何形成；这些段落不再表示当前待办。当前实现已完成
+Room、真实导入、WebView runtime、状态持久化和 R3 书架能力，冻结状态见本文 §12。
 
 ## 1. 架构目标
 
@@ -350,10 +353,10 @@ hardcoded mock
 
 Android 端不实现 KMD parser、layout 或 renderer。Reader Runtime 是外部能力，Android 只做宿主。
 
-ViewModel 与 Runtime Bridge 的详细演进规划见：
+ViewModel 与 Runtime Bridge 的阶段演进记录已归档：
 
 ```text
-docs/planning/runtime/viewmodel-runtime-plan.md
+docs/archive/course-r3-2026/runtime/viewmodel-runtime-plan.md
 ```
 
 ### 8.1 Bridge 边界
@@ -377,7 +380,8 @@ sealed interface ReaderRuntimeEvent {
 }
 ```
 
-第二阶段只做 `ReaderDesk` 占位，不接 WebView。文档和包结构先保留 `runtime/`，避免后面接入时打穿 UI。
+阶段初期曾只做 `ReaderDesk` 占位；当前已接入真实 WebView runtime。保留这一记录是为了说明
+`runtime/` 边界先于具体宿主落地，而不是表示 WebView 尚未实现。
 
 ## 9. UI 组件原则
 
@@ -392,7 +396,7 @@ sealed interface ReaderRuntimeEvent {
 
 组件不直接读取 repository，不持有全局业务状态。
 
-## 10. 实现节奏
+## 10. 历史实现节奏
 
 ### 10.1 第二阶段最小健康实现
 
@@ -413,7 +417,7 @@ sealed interface ReaderRuntimeEvent {
 - 真实文件导入。
 - 权限系统。
 
-### 10.2 后续演进
+### 10.2 已完成的阶段演进
 
 ```text
 第二阶段：Compose 静态原型 + mock 数据
@@ -421,6 +425,8 @@ sealed interface ReaderRuntimeEvent {
 第四阶段：WebView Reader Runtime Bridge
 第五阶段：审核检查结果和远程社区 API
 ```
+
+以上课程阶段均已结束；它们不是当前路线图。
 
 ## 11. 架构约束
 
@@ -432,18 +438,9 @@ sealed interface ReaderRuntimeEvent {
 - 不假设所有 KMD 都是纵向阅读。
 - 不为了第二阶段截图牺牲长期包结构。
 
-## 12. 下一步
+## 12. 当前基线
 
-建议下一步先创建包结构和空骨架：
-
-```text
-domain/model
-data
-presentation
-ui/app
-ui/screen
-ui/component
-runtime
-```
-
-然后用 mock 数据实现第一版 `KmdReaderApp`。这样我们能在长期边界清楚的前提下，快速得到可截图的页面原型。
+上述包结构、Repository、ViewModel/StateFlow、Compose 页面与 WebView runtime bridge 均已落地。
+课程至 R3 的连续开发已经结束；本文件只描述长期架构，不再维护实施顺序。当前冻结状态与未来恢复
+条件见 [`../../planning/roadmap.md`](../../planning/roadmap.md) 和
+[`../../planning/post-r3-reentry-backlog.md`](../../planning/post-r3-reentry-backlog.md)。

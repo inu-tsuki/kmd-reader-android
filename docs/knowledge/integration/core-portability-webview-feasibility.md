@@ -1,10 +1,10 @@
 # KMD Core 可移植性与 WebView 宿主可行性审计
 
 > 项目阶段：阶段 D 前置审计  
-> 文档状态：草案  
-> 最近更新：2026-06-16
+> 文档状态：历史审计结论；宿主边界仍有效
+> 最近更新：2026-07-14
 
-> 命名约定：本审计定义的 **D0–D3** 是 WebView 宿主子阶段（见 §7）；**阶段 A–E** 是 ViewModel/runtime 推进阶段（见 `planning/runtime/viewmodel-runtime-plan.md`，其中阶段 D 承载 D0–D3）；**Phase R** 是主仓库 reader-runtime-web 抽离阶段。三者都用字母 D，但分属不同坐标轴。
+> 命名约定：本审计定义的 **D0–D3** 是 WebView 宿主子阶段（见 §7）；**阶段 A–E** 是已归档的 ViewModel/runtime 推进阶段；**Phase R** 是主仓库 reader-runtime-web 抽离阶段。历史计划见 [`../../archive/course-r3-2026/runtime/viewmodel-runtime-plan.md`](../../archive/course-r3-2026/runtime/viewmodel-runtime-plan.md)。
 
 ## 1. 结论
 
@@ -38,7 +38,7 @@ Android Compose
 - `apps/editor/src/core/`
 - `apps/editor/src/store/editorStore.ts`
 - `docs/planning/ecosystem/repository-strategy.md`
-- `apps/android-reader/docs/planning/runtime/viewmodel-runtime-plan.md`
+- `apps/android-reader/docs/archive/course-r3-2026/runtime/viewmodel-runtime-plan.md`
 
 重点检查：
 
