@@ -10,7 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -37,6 +39,7 @@ import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.ui.screen.browse.BrowseDesk
 import com.example.kmd_reader.ui.screen.browse.FilterOverlay
 import com.example.kmd_reader.ui.screen.importkmd.ImportDesk
+import com.example.kmd_reader.ui.screen.mine.BookshelfView
 import com.example.kmd_reader.ui.screen.mine.MineDesk
 import com.example.kmd_reader.ui.screen.mine.SettingsSheet
 import com.example.kmd_reader.ui.screen.reader.ReaderDesk
@@ -62,6 +65,7 @@ fun KmdReaderApp(
     val latestActiveIndex by rememberUpdatedState(state.deskStack.activeIndex)
     val latestLastIndex by rememberUpdatedState(desks.lastIndex)
     var programmaticTargetPage by remember { mutableStateOf<Int?>(null) }
+    var bookshelfView by rememberSaveable { mutableStateOf(BookshelfView.Library) }
 
     // R3-D3：SAF 文件选择器。OpenDocument 支持 EXTRA_MIME_TYPES。
     // 支持双格式：.kmdwork zip（application/zip, application/x-zip-compressed）+ 裸 .kmd（text/plain, text/markdown）
@@ -143,7 +147,7 @@ fun KmdReaderApp(
     Surface(
         modifier = modifier
             .fillMaxSize()
-            .systemBarsPadding(),
+            .then(if (isReaderActive) Modifier else Modifier.safeDrawingPadding()),
         color = MaterialTheme.colorScheme.background
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -162,12 +166,18 @@ fun KmdReaderApp(
                 }
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     userScrollEnabled = !isReaderActive
                 ) { page ->
                     when (desks[page]) {
                         Desk.Mine -> MineDesk(
                             shelfState = state.shelfState,
+                            importState = state.importState,
+                            selectedView = bookshelfView,
+                            nowMillis = System.currentTimeMillis(),
+                            onBookshelfViewChange = { bookshelfView = it },
                             onOpenImport = { dispatch(KmdReaderAction.OpenImport) },
                             onOpenWork = { dispatch(KmdReaderAction.OpenWork(it)) },
                             onContinueReading = { workId ->

@@ -216,6 +216,8 @@ flowchart LR
 - ✅ 加入书架按钮（发现页 `WorkCard` + 详情页 `WorkDetailDesk` toggle）。
 - ✅ 详情页续读状态（R3-H）：只消费 `shelfState`，以与 Ready 后恢复一致的 revision 规则展示“继续阅读”或“开始阅读”。
 - 待后续（R3-I）：阅读偏好设置。
+- ✅ R3-K1：纯书架 UI 投影、Library/History 模式切换、continue、本地可读/需联网分组、导入状态和响应式单主滚动布局已实现并完成视觉验收。
+- 待后续（R3-K2）：排序筛选与非破坏性管理；删除/缓存动作仍受独立数据边界 gate 约束。
 
 ### 7.2 发现桌面
 

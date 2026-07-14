@@ -11,10 +11,15 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -38,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -176,7 +182,9 @@ fun ReaderDesk(
                         onCloseCompanion()
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("reader-runtime-host")
             )
         }
 
@@ -199,7 +207,13 @@ fun ReaderDesk(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+                        )
+                    )
                     .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("reader-top-overlay")
             )
         }
 
@@ -240,7 +254,9 @@ fun ReaderDesk(
                 onClose = onCloseCompanion,
                 modifier = Modifier
                     .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(top = if (showFullChrome) 62.dp else 0.dp)
+                    .testTag("reader-companion-overlay")
             )
         }
 
@@ -266,7 +282,13 @@ fun ReaderDesk(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                        )
+                    )
                     .padding(horizontal = 14.dp, vertical = 14.dp)
+                    .testTag("reader-playback-overlay")
             )
         } else if (showDimmedChrome && !hasActiveCompanion) {
             ReaderMinimalChrome(
@@ -279,7 +301,13 @@ fun ReaderDesk(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                        )
+                    )
                     .padding(horizontal = 14.dp, vertical = 14.dp)
+                    .testTag("reader-minimal-overlay")
             )
         }
 
