@@ -3,6 +3,7 @@ package com.example.kmd_reader.data
 import com.example.kmd_reader.domain.model.ScriptIssue
 import com.example.kmd_reader.domain.model.Work
 
+/** Read boundary for discovery metadata, issues, and playable KMD source. */
 interface WorkRepository {
     suspend fun listWorks(refresh: Boolean = true): List<Work>
     suspend fun getWork(id: String, refresh: Boolean = true): Work?

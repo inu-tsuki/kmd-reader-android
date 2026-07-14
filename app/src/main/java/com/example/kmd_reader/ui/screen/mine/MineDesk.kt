@@ -35,6 +35,8 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -236,7 +238,7 @@ private fun BookshelfToolbar(onOpenImport: () -> Unit, onOpenSettings: () -> Uni
         }
         Row {
             TooltipBox(
-                positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
                 tooltip = { PlainTooltip { Text("导入作品") } },
                 state = rememberTooltipState()
             ) {
@@ -245,7 +247,7 @@ private fun BookshelfToolbar(onOpenImport: () -> Unit, onOpenSettings: () -> Uni
                 }
             }
             TooltipBox(
-                positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
                 tooltip = { PlainTooltip { Text("打开阅读设置") } },
                 state = rememberTooltipState()
             ) {

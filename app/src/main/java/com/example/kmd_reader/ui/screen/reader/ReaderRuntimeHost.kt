@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
-import android.os.Build
 import android.util.Log
 import android.view.MotionEvent
 import android.view.ViewConfiguration
@@ -17,7 +16,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +41,7 @@ import com.example.kmd_reader.BuildConfig
 import com.example.kmd_reader.runtime.ReaderRuntimeBridge
 import com.example.kmd_reader.runtime.webview.RuntimeJavascriptBridge
 import com.example.kmd_reader.runtime.webview.WebViewReaderRuntimeBridge
+import java.io.File
 import android.graphics.Color as AndroidColor
 import androidx.compose.ui.graphics.Color as ComposeColor
 
@@ -182,7 +181,7 @@ fun ReaderRuntimeHost(
 }
 
 @Suppress("DEPRECATION")
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 private fun WebView.configureForRuntime(
     runtimeBridge: WebViewReaderRuntimeBridge,
     visualDebugEnabled: Boolean,
@@ -204,12 +203,8 @@ private fun WebView.configureForRuntime(
     settings.allowFileAccessFromFileURLs = false
     settings.allowUniversalAccessFromFileURLs = false
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        settings.safeBrowsingEnabled = true
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-    }
+    settings.safeBrowsingEnabled = true
+    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
 
     val isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     WebView.setWebContentsDebuggingEnabled(isDebuggable)
@@ -222,6 +217,7 @@ private fun WebView.configureForRuntime(
         onTwoFingerTap = onTwoFingerTap,
         onSingleFingerDoubleTap = onRuntimeDoubleTap
     )
+    // Observe multi-touch without consuming WebView clicks, drags, or interactive KMD input.
     setOnTouchListener { _, event ->
         hostGestureObserver.onTouchEvent(event)
         false

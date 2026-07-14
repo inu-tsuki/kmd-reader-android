@@ -16,11 +16,8 @@ import java.io.InputStream
  * cacheDir/runtime-extract/<bundleId>/  # 当前播放的展开 cache（D4 消费）
  * ```
  *
- * 清理策略（spike §2.4）：
- * - 导入新作品：清 cacheDir/runtime-extract/ 旧 cache（单作品假设）
- * - 删作品：删 filesDir/bundles/<bundleId>/ + cacheDir + Room 行
- * - onTrimMemory：清 cacheDir/runtime-extract/ 全部（D3 或后续接线）
- * - 启动孤儿扫描：删 Room 索引里不存在的 cacheDir 孤儿（D3 或后续接线）
+ * 当前只在导入/展开边界维护 runtime cache。作品删除、Room/bundle/revision 级联、
+ * onTrimMemory 与孤儿扫描仍属于 Post-R3 数据生命周期设计，不由本类单方面执行。
  */
 class BundleStore(
     private val bundlesDir: File,

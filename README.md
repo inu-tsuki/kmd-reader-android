@@ -6,6 +6,27 @@ KMD Reader Android 是 KMD 的移动端阅读宿主，也是 2026 Android 课程
 阅读进度、全局偏好、Web runtime 宿主与轻量审阅骨架；未来将在 KMD 社区契约稳定后重新评估
 Android 侧开发，而不是继续扩张旧 R3 切片。
 
+## 下载与运行要求
+
+- 最低系统：Android 9.0（API 28）。
+- 推荐环境：Android 16 / API 36 模拟器或同等级真机。
+- 课程最终 APK：[下载 `kmd-reader-v1.0-release-debug.apk`](https://github.com/inu-tsuki/kmd-reader-android/releases/download/v1.0-release/kmd-reader-v1.0-release-debug.apk)。
+- APK 为 debug-signed 课程交付包，不是应用商店生产签名版本。
+
+## 功能截图
+
+| 书架与继续阅读 | 作品详情 |
+|---|---|
+| ![书架首页展示继续阅读、本地可读与需联网作品](docs/assets/v1.0-release/01-bookshelf.png) | ![作品详情展示作品属性与阅读、审阅、书架入口](docs/assets/v1.0-release/02-work-detail.png) |
+
+| 真实 KMD 阅读 | 阅读中的脚本审阅 |
+|---|---|
+| ![真实 Web runtime 内容与 Android 播放控制层](docs/assets/v1.0-release/03-reader-runtime.png) | ![Review companion 展示源码上下文、播放行与 issue 入口](docs/assets/v1.0-release/04-review-companion.png) |
+
+## 演示视频
+
+> B 站演示视频链接将在创建 `v1.0-release` 最终提交前补入。
+
 ## 已交付能力
 
 - 导入裸 `.kmd` 与含 assets 的 `.kmdwork`，存入应用私有存储并离线阅读。
@@ -65,9 +86,11 @@ Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
 - [Post-R3 重启 Backlog](docs/planning/post-r3-reentry-backlog.md)
 - [课程至 R3 历史归档](docs/archive/course-r3-2026/README.md)
 - [应用架构](docs/knowledge/architecture/app-architecture.md)
+- [页面架构](docs/knowledge/architecture/page-architecture.md)
+- [UI 架构与设计](docs/knowledge/architecture/ui-design.md)
 
-最终稳定点通过 Git tag `r3-final` 和同名 GitHub Pre-release 标记。Release 附带 debug-signed APK、
-Android/runtime commit、验证结果与 SHA-256；它是课程阶段可安装快照，不是生产签名发布物。
+`r3-final` 标记课程开发至 R3 的工程冻结点；`v1.0-release` 标记包含最终 README、截图、视频和 APK
+链接的课程提交版本。最终 Release 附带 debug-signed APK、Android/runtime commit、验证结果与 SHA-256。
 
 ## License
 

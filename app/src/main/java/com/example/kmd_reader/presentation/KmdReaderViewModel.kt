@@ -46,6 +46,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
+/**
+ * Owns the reader UI state machine and coordinates repository, local persistence, and runtime events.
+ * UI code dispatches [KmdReaderAction] values and observes [state] plus one-shot [effectFlow] effects.
+ */
 class KmdReaderViewModel(
     private val repository: WorkRepository = MockWorkRepository(),
     private val runtimeBridge: ReaderRuntimeBridge = FakeReaderRuntimeBridge(),

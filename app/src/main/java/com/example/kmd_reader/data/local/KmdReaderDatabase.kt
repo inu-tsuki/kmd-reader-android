@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
+/** Room database for community cache plus the R3 local-library persistence model. */
 @Database(
     entities = [
         WorkEntity::class,
