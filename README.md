@@ -69,6 +69,10 @@ Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
 最终稳定点通过 Git tag `r3-final` 和同名 GitHub Pre-release 标记。Release 附带 debug-signed APK、
 Android/runtime commit、验证结果与 SHA-256；它是课程阶段可安装快照，不是生产签名发布物。
 
+## License
+
+本仓库与 KMD 主仓库一致，使用 [Apache License 2.0](LICENSE)。第三方依赖继续遵循各自许可证。
+
 ## 未来恢复开发
 
 恢复时先阅读 Post-R3 backlog，重新核实当前 Android 工具链、主仓库 runtime 协议、community API
