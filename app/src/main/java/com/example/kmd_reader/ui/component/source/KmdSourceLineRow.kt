@@ -35,10 +35,10 @@ internal fun KmdSourceLineRow(
     text: String,
     focused: Boolean,
     highlights: List<KmdSourceHighlight>,
-    badges: List<KmdSourceLineBadge> = emptyList(),
     onLineClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    badges: List<KmdSourceLineBadge> = emptyList(),
     onBadgeClick: (String) -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
     val hasPlayback = highlights.any { it.kind == KmdSourceHighlightKind.Playback }
     val hasIssue = highlights.any { it.kind == KmdSourceHighlightKind.Issue }

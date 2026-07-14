@@ -32,10 +32,8 @@ import com.example.kmd_reader.data.preferences.ReaderPreferences
 import com.example.kmd_reader.data.preferences.ThemeMode
 
 /**
- * R3-F：设置/关于 overlay（page-architecture §7.1 要求书架页提供设置/关于入口）。
- *
- * 与 FilterOverlay 同构：半透明背景 + Surface 卡片，不新增 Desk 条带。
- * 当前只放项目说明 + 版本占位项；R3-I 设置页在此扩展阅读偏好（fontScale/主题/reducedMotion）。
+ * 设置/关于 overlay。与 FilterOverlay 同构，不新增 Desk 条带；阅读偏好由 R3-I DataStore
+ * 状态驱动，滑动中的字号预览与最终持久化使用独立回调。
  */
 @Composable
 fun SettingsSheet(
@@ -89,14 +87,14 @@ fun SettingsSheet(
                     valueRange = ReaderPreferences.MIN_FONT_SCALE..ReaderPreferences.MAX_FONT_SCALE,
                     steps = 8
                 )
-                settingSwitch("自动保存阅读进度", preferences.autoSaveProgress, onAutoSaveProgressChange)
-                settingSwitch("减少动态效果", preferences.reducedMotion, onReducedMotionChange)
+                SettingSwitch("自动保存阅读进度", preferences.autoSaveProgress, onAutoSaveProgressChange)
+                SettingSwitch("减少动态效果", preferences.reducedMotion, onReducedMotionChange)
                 SectionTitle("关于", "")
                 InfoCard(
                     title = "KMD Reader",
                     body = "KMD 作品阅读器 —— 活动桌面式导航，本地导入与社区发现。"
                 )
-                StatRow(label = "版本", value = "R3-I (开发中)")
+                StatRow(label = "版本", value = "1.0（课程最终版）")
                 StatRow(label = "KMD Runtime", value = "WebView Host")
                 OutlinedButton(
                     onClick = onClose,
@@ -110,7 +108,7 @@ fun SettingsSheet(
 }
 
 @Composable
-private fun settingSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun SettingSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     androidx.compose.foundation.layout.Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,

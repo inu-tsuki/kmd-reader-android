@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -147,7 +148,7 @@ private fun BoxScope.ReviewCompanionPanel(
         ?: issueFocus.focusedSourceRange?.startLine
     val selectedSourceLine = issueFocus.selectedSourceLine
     var activeContextLine by remember(work.id) { mutableStateOf<Int?>(null) }
-    var scrollRequestKey by remember(work.id) { mutableStateOf(0) }
+    var scrollRequestKey by remember(work.id) { mutableIntStateOf(0) }
     var focusMode by remember(work.id, issueFocus.selectedIssueId) {
         mutableStateOf(
             if (selectedIssueLine != null) {

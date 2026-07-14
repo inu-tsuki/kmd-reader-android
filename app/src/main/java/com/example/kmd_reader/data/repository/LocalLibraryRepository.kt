@@ -79,6 +79,7 @@ object RevisionStorageMode {
     const val FULL = "full"
 }
 
+/** Persistence boundary for the local library, immutable revisions, and draft buffers. */
 interface LocalLibraryRepository {
     // 作品级
     suspend fun getEntry(workId: String): LocalLibraryEntry?
@@ -89,8 +90,8 @@ interface LocalLibraryRepository {
     suspend fun setOnShelf(workId: String, onShelf: Boolean)
     suspend fun removeEntry(workId: String)
 
-  // 提交级（commit 模型，§2.7）。append-only：调用方负责生成新 id，不覆写已有提交。
-  suspend fun getLatestRevision(workId: String): LocalRevision?
+    // 提交级（commit 模型，§2.7）。append-only：调用方负责生成新 id，不覆写已有提交。
+    suspend fun getLatestRevision(workId: String): LocalRevision?
     suspend fun findRevisionByContentHash(workId: String, contentHash: String): LocalRevision?
     suspend fun getRevisionsForWork(workId: String): List<LocalRevision>
     suspend fun saveRevision(revision: LocalRevision)

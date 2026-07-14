@@ -5,15 +5,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.example.kmd_reader.data.KmdReaderAppContainer
+import com.example.kmd_reader.data.preferences.ThemeMode
 import com.example.kmd_reader.presentation.KmdReaderViewModel
 import com.example.kmd_reader.ui.app.KmdReaderApp
 import com.example.kmd_reader.ui.theme.KmdreaderTheme
-import com.example.kmd_reader.data.preferences.ThemeMode
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.foundation.isSystemInDarkTheme
 
+/** Android entry point that owns the application container and root Compose theme. */
 class MainActivity : ComponentActivity() {
     private val appContainer by lazy {
         KmdReaderAppContainer(applicationContext)

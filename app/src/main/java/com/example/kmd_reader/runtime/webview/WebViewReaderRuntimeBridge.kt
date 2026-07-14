@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
+/** Thread-safe command queue and event adapter between the ViewModel and the attached WebView. */
 class WebViewReaderRuntimeBridge : ReaderRuntimeBridge {
     private companion object {
         const val LogTag = "KmdReaderWebView"
